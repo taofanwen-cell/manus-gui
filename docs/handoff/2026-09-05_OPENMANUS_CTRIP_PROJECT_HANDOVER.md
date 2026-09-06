@@ -384,3 +384,44 @@ A dynamic web form cannot safely be driven by a free-form LLM Agent reusing DOM 
 ```
 
 The correct next implementation is a deterministic, verifiable, replayable form state machine. Do not redirect the project toward automated ordering or bypassing Ctrip protection.
+
+## 10. 老师的另一条路线 (vision / gui-plus) — 2026-09-06 补充
+
+接手时一度以为 `D:\It\Test_Project\case\OpenManus-gui` 是"可一口气实现的源码"，差点把状态机路线推倒重做。后来发现那是**视觉路线**，根本不可直接搬：
+
+| 维度 | 老师 (gui-plus 视觉) | 本项目 (CtripFlightFormExecutor 状态机) |
+|---|---|---|
+| 操作单位 | 屏幕像素坐标 + 键盘文本 | DOM selector_map + 显式 `target_field_index` |
+| 决策主体 | 阿里云百炼 `gui-plus` 视觉大模型看截图 | 8 状态机：INITIAL → RESULTS_READY |
+| DOM 角色 | 只看 `elements.txt` 描述 | 实际 click / read_field_value |
+| 限速 | LLM 推理延迟 (~3-8s/步) | 浏览器原生速度 (~200ms/步) |
+| 适配风控 / DOM rerender | LLM 自适应但容易幻觉 | 白名单硬约束 + 严格相等谓词 |
+| 政策可执行性 | 无 (坐标点击无法 policy 拦) | `app/ctrip_policy.py` 三道白名单 |
+| 复用现有 fixtures | 不能 (vision 看图) | 能 (mock + DOM 状态机) |
+| 适用场景 | 一次性跨站点 GUI 任务 | 单一网站可回归的查询表单 |
+
+**老师做了什么 (从 `debug_html/` 看)**：
+
+- 真实跑过 `flights.ctrip.com/online/channel/domestic` (launch)、`online/list/oneway-sha-bjs` (结果页)、`date_picker_opened` 三种页面状态；
+- 跨 qunar / fliggy / airpaz / skyscanner 多源通用；
+- 城市输入策略：**先 TYPE 文本，不点 input**，等浮层出现，再 vision_click 第一条候选；
+- 日期选择器：识别 `div.calendar-modal` 内的 `span.date-d` + `div.date-day[onclick]`。
+
+**两条路线的取舍**：
+
+- **本项目的状态机路线更适合**：可回归测试、可 policy 约束、可 mock 跑 CI、可 trace 调试。
+- **老师的 vision 路线更适合**：跨站点一次性任务（japan-travel-plan 那种），不要求强 policy 约束。
+- **不要混用**：vision 坐标点击 → 无法过 policy 拦截（policy 是按 action 名 + URL + text，不是按坐标）。
+
+**老师成果在我们项目里的复用方式**：
+
+1. `scripts/inspect_ctrip_selectors.py` 扫老师 `debug_html/*.elements.txt`，抽出真实 selector 分布直方图。
+2. `app/ctrip_policy.py:RECOMMENDED_FIELD_INDEX` 是从 343 次 launch-page hits 算出的 top1（origin=37, dest=38, depart=40, return=41, search=48）。
+3. `tests/test_ctrip_real_selectors.py` (6 用例) 把这些 top1 钉成回归基线 — 携程 A/B 改版让 top1 变了，本测试 + policy 常量要一起改。
+4. `DOM 改一点 index 就漂` 这个事实，正式写入 Bug #1 的根因解释（已在 `MEMORY.md` 第 1 条硬规则说明）。
+
+**未来若要吸收更多老师成果**：
+
+- date_picker 的 `span.date-d` / `div.date-day` selector 可写进 `CtripQueryBrowserAdapter.refresh_state()` 的面板解析；
+- `analyze_date_picker.py` 的 calendar-modal 切窗逻辑可抽成纯函数复用；
+- vision 截图 `vision_click.png` / `vision_click_clicked.png` 系列可作"点击位置"的 ground truth 训练样本（需要新数据集 skill，本项目不做）。
