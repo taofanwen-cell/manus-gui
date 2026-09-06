@@ -152,7 +152,7 @@ def test_executor_main_calls_run(monkeypatch, tmp_path):
         captured["trace_path"] = trace_path
         return 0
 
-    monkeypatch.setattr(executor_cli, "_run", fake_run)
+    monkeypatch.setattr(executor_cli, "_run_state", fake_run)
     trace = tmp_path / "trace.json"
     monkeypatch.setattr(sys, "argv", [
         "ctrip_executor_cli.py",

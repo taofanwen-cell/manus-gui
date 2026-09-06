@@ -425,3 +425,47 @@ The correct next implementation is a deterministic, verifiable, replayable form 
 - date_picker 的 `span.date-d` / `div.date-day` selector 可写进 `CtripQueryBrowserAdapter.refresh_state()` 的面板解析；
 - `analyze_date_picker.py` 的 calendar-modal 切窗逻辑可抽成纯函数复用；
 - vision 截图 `vision_click.png` / `vision_click_clicked.png` 系列可作"点击位置"的 ground truth 训练样本（需要新数据集 skill，本项目不做）。
+
+## 11. 四条路线横向对比 (vision / URL / 状态机+adapter / 自由 LLM) — 2026-09-06 补充
+
+把 `D:\It\Test_Project\case\` 下三个老师项目都看完后，整理出 4 条可走的路线。这不是历史回顾，是**选路决策依据**：
+
+| 路线 | 实现 | 优势 | 劣势 | 适用场景 | sandbox 验证 |
+|---|---|---|---|---|---|
+| **A. Vision (gui-plus)** | 截图 → LLM 出坐标 → 鼠标点 | 跨站点、不规则页面通吃 | LLM 慢、坐标漂、policy 无法拦、需真浏览器 | 一次性跨站 GUI 任务 (japan-travel-plan) | 不行 (要真 Chrome) |
+| **B. URL 路由 (rag)** | 拼 `online/list/oneway-can-pek?depdate=...` → goto | 1 次 goto、纯逻辑可单测、可 sandbox 验证 URL 构造 | 仅对路由友好的网站有效、URL schema 改了要重写 | **携程机票查询 (本 MVP 实际最优)** | **OK, URL 构造纯逻辑** |
+| **C. 状态机+adapter (本项目 P0)** | 8 状态机模拟人填表 + 显式 target_field_index | DOM 精准、可 policy 拦截、可 verify、回归测试 | adapter 维护成本高、需真 Chrome 跑端到端 | 单一网站可回归查询表单 (A/B 改版后 adapter 要跟) | mock OK, 真机不行 |
+| **D. 自由 LLM Agent (本项目原有)** | Manus 框架 + DashScope key + 自由 loop | 灵活、能处理意外 | 不可重现、不可回归、容易重试到炸、policy 形同虚设 | 探索性任务 (demo / 写代码) | 不行 (要 key + 真浏览器) |
+
+**结论：本 MVP 的最优组合是 B + C**。
+
+- **首选 B (URL 路线)**: 80% 任务（"广州到北京 2026-09-25"这种标准查询）一次 goto 拿结果。URL 构造逻辑 100% sandbox 验证，端到端在用户本地真 Chrome 跑只需 `goto_url` + `extract_content` 两步。
+- **兜底 C (状态机路线)**: URL 失败（schema 改版 / 城市不在 IATA 表）时 fallback。原 65 单测 + CDP 脚本不变。
+- **永不用 A 和 D**: A 推不动 policy；D 推不动回归。
+
+**落地清单 (commit `123f0d2` 之后)**：
+
+1. `app/ctrip_url_query.py` —— B 路线的核心，260 行。导出 `build_flight_url / build_flight_url_from_query / parse_date / get_city_code / URLOnlyPolicy / FlightSearchParams`。
+2. `tests/test_ctrip_url_query.py` —— 26 个单测覆盖：单程 / 往返 / 中文 / IATA / 自然语言 / 未知城市报错 / 日期 wrap / policy 拦截 / 城市表完整性。
+3. `ctrip_executor_cli.py` —— 加 `--strategy state|url` 双策略 + `--query "自然语言"` + `--dry-run`（sandbox 也能跑 URL 构造）。
+4. `docs/handoff/...HANDOVER.md` —— 本节（第 11 节）作为选路决策依据。
+
+**CLI 用法（用户在本地跑）**：
+
+```powershell
+# URL 路线 (首选) - sandbox 也能跑 dry-run 看到 URL
+python ctrip_executor_cli.py --strategy url --origin 广州 --destination 北京 --date 2026-09-25 --dry-run
+python ctrip_executor_cli.py --strategy url --query "明天从北京到广州的机票" --dry-run
+
+# URL 路线 (真浏览器) - 拿到 URL 后浏览器打开即得结果
+python ctrip_executor_cli.py --strategy url --origin 广州 --destination 北京 --date 2026-09-25
+
+# 状态机路线 (兜底) - 不需真 Chrome 但完整 mock trace
+python ctrip_executor_cli.py --strategy state --origin 广州 --destination 北京 --date 2026-09-25
+```
+
+**遗留（按优先级）**：
+
+1. **真实 CDP 端到端 (URL 路线在用户本地 Chrome 跑一次)** — 验证 schema 没改、result page DOM 解析可用，是 P1 唯一剩下的活。
+2. 抽取 `extract_flight_options_from_html` 落 `app/ctrip_flights.py` —— URL 路线拿到 HTML 后自动解析成 `FlightOption` 列表，跟状态机路线用同一份 `ctrip_flights.py` 数据结构。
+3. UI 整合：自由 LLM 入口（`ctrip_query_assistant.py`）先 try URL → 失败 fallback 状态机 → 仍失败 HUMAN_TAKEOVER_REQUIRED。
