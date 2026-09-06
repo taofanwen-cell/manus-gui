@@ -1,0 +1,8 @@
+{
+    "sha256":  "ad552a2d642e4ec8746dc514513ade2dfe07ccd5bcc876589b7d477afa28615a",
+    "source":  "D:\\It\\Test_Project\\case\\OpenManus-gui\\debug_html\\20260121_231020_flights.ctrip.com_online_list_oneway-sha-bjs___1_d.html",
+    "purpose":  "Offline DOM regression fixture only; historical snapshot, not live fare data.",
+    "departure_date":  "2026-01-30",
+    "route":  "SHA-BJS",
+    "captured_at":  "2026-01-21T23:10:20"
+}

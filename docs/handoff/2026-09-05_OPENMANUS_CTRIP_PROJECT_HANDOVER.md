@@ -1,0 +1,386 @@
+﻿# OpenManus Ctrip Flight Assistant: Handover
+
+**Handover date:** September 5, 2026  
+**Project root:** `D:\It\Test_Project\Openmanus-Project\upstream\manus-gui`  
+**Current scope:** Ctrip flight search and recommendation. The system must stop before booking, order creation, or payment.
+
+> This document contains no API key, cookie, password, login token, passenger information, or payment information.
+
+## 1. Product boundary
+
+### In scope
+
+- User supplies origin, destination, future departure date, budget, and time preferences.
+- User logs in and handles verification in a visible Chrome window.
+- Agent connects only to that user-authorized local Chrome through local CDP.
+- Agent reads visible flight results, normalizes fields, filters/ranks options, and produces an explainable report.
+
+Example itinerary used in testing:
+
+```text
+Guangzhou -> Beijing
+September 25, 2026
+One way
+```
+
+### Explicitly out of scope
+
+The Agent must never:
+
+- log in, register, solve CAPTCHA, bypass verification, or evade risk controls;
+- copy/export cookies, passwords, or session tokens;
+- enter passenger identity data;
+- click booking / reserve / place-order controls;
+- create or submit an order, enter a payment page, or pay;
+- use GUI coordinate clicks, arbitrary page JavaScript, fingerprint changes, proxies, or anti-bot workarounds;
+- describe historical fixture prices as live prices.
+
+A user asked for automatic ordering. It was not performed. Refundability does not remove the risk of booking, inventory locking, or payment.
+
+## 2. Architecture
+
+```text
+Visible Chrome owned by user (dedicated local profile)
+  -> CDP bound to 127.0.0.1:9222 only
+  -> BrowserUseTool (browser-use)
+  -> CtripQueryTool (least-privilege policy + form click whitelist)
+  -> current transitional runner: ctrip_query_assistant.py
+  -> target replacement: deterministic CtripFlightFormExecutor state machine
+  -> app/ctrip_flights.py (HTML parsing, normalization, rule ranking)
+  -> ctrip_flight_report.py (offline report)
+  -> user decides whether to continue manually before booking
+```
+
+### Required future change
+
+Do **not** continue relying on Manus/free-form LLM browser clicking for the query form. Implement `CtripFlightFormExecutor` as a deterministic state machine:
+
+1. refresh the current selector map;
+2. locate origin field by semantic attributes;
+3. fill/select the expected origin;
+4. reread DOM and verify origin value;
+5. repeat for destination and date;
+6. verify all three values exactly match the requested itinerary;
+7. locate only the search button inside the active form;
+8. read results only; stop before booking controls.
+
+LLM should be limited to lower-risk work: explaining page anomalies, mapping natural-language preferences to structured filters, and summarizing structured results.
+
+## 3. Implemented components
+
+### Model, credentials, and RAG
+
+- `app/config.py`: resolves DashScope credentials in this order: `.env`, `config/.dashscope_api_key`, process environment.
+- `.env`: user-local and ignored; contains `DASHSCOPE_API_KEY`. Never print or overwrite it.
+- `config/config.toml`: main LLM is `qwen3.7-flash`; visual inspector is `gui-plus`.
+- `scripts/test_dashscope_connection.py`: authentication was successfully tested earlier.
+- Existing Chroma/RAG foundation:
+  - `D:\It\Test_Project\Openmanus-Project\data\index\chroma`
+  - `D:\It\Test_Project\Openmanus-Project\src\knowledge_base\service.py`
+  - `app/tool/project_knowledge.py`
+
+RAG may contain course notes, architecture decisions, and safe workflow experience. Never store live fares, inventory, credentials, or personal data.
+
+### CDP and visible Chrome
+
+- `scripts/start_ctrip_cdp_chrome.ps1`: launches a dedicated, visible Chrome with `--remote-debugging-address=127.0.0.1` and port `9222`.
+- `scripts/test_ctrip_cdp_connection.py`: checks only `/json/version`; rejects non-local CDP endpoints.
+- `app/tool/browser_use_tool.py`: reads `CTRIP_CDP_URL`; CDP cleanup must not close the user's Chrome.
+- `.gitignore`: ignores `runtime/ctrip-cdp-chrome-profile/`.
+
+Actual CDP verification on September 5, 2026:
+
+```text
+Chrome/152.0.7977.82
+http://127.0.0.1:9222
+```
+
+### Least-privilege Ctrip tool
+
+- `app/ctrip_policy.py`
+- `app/tool/ctrip_query_tool.py`
+- `ctrip_query_assistant.py`
+
+Policy:
+
+- domains limited to `ctrip.com` and `trip.com`;
+- blocks GUI coordinates, arbitrary JS, extra tabs, uploads, image paste, web search;
+- blocks login, CAPTCHA, account, order, payment, and related URLs;
+- blocks text related to login, verification, passenger info, booking, reserve, place order, submit order, and payment;
+- `vision_inspect` is read-only through `gui-plus`;
+- WhaleGuard/site-protection/CAPTCHA detection locks future actions and requires human takeover.
+
+Recent protection improvement:
+
+- Before `click_element`, `input_text`, or `select_date`, the tool refreshes the current browser selector map with `context.get_state(cache_clickable_elements_hashes={})`.
+- Only current form origin/destination/date fields, the active form search control, one-way selection, and exact requested city options are allowed.
+- Recommendation cards, history cards, ads, unrelated cities, and all booking/payment targets are blocked.
+
+### Offline parsing and ranking
+
+- `app/ctrip_flights.py`: converts saved Ctrip HTML to `FlightOption`.
+- `ctrip_flight_report.py`: offline CLI report.
+- `docs/handoff/CTRIP_FLIGHT_DECISION_ENGINE.md`: detailed implementation notes.
+
+Extracted fields include airline, flight number, aircraft, departure/arrival time, airports/terminals, price, cabin, discount, duration, shared-flight flag, seats, labels, and raw text.
+
+Supported filters:
+
+```text
+max price
+minimum departure time
+maximum arrival time
+exclude shared flights
+```
+
+Supported ranking:
+
+```text
+price / duration / departure / balanced
+```
+
+Missing fields remain `None`; no value is invented. Offline reports label the source as historical data, not live fares.
+
+### Teacher-case reuse
+
+Source case directory:
+
+```text
+D:\It\Test_Project\case\OpenManus-gui
+```
+
+Useful lessons reused:
+
+- DOM first;
+- dedicated date selection;
+- retain HTML snapshots for diagnosis;
+- visual model only for diagnostics;
+- fixtures are not live fares.
+
+Copied fixture:
+
+```text
+tests/fixtures/ctrip/legacy_sha_bjs_result_20260121.html
+tests/fixtures/ctrip/manifest.json
+```
+
+Do not reuse fixed-coordinate or fixed-index clicking from the teacher case.
+
+## 4. Real execution history
+
+### Headless stage
+
+Ctrip/Trip.com returned:
+
+```text
+whaleguard block
+Interactive elements: 0
+```
+
+`gui-plus` confirmed a protection page. No bypass, proxy rotation, browser-fingerprint manipulation, or CAPTCHA handling was attempted.
+
+Log:
+
+```text
+logs/ctrip_mvp/20260905_200039_can-bjs_visual_inspect.log
+```
+
+### CDP visible-Chrome stage
+
+CDP connection succeeded. Ctrip flight search page was reachable:
+
+```text
+https://flights.ctrip.com/online/channel
+68-69 interactive elements
+```
+
+#### First Guangzhou -> Beijing test
+
+Command:
+
+```powershell
+$env:CTRIP_CDP_URL = 'http://127.0.0.1:9222'
+.\.venv\Scripts\python.exe .\ctrip_query_assistant.py --origin Guangzhou --destination Beijing --date 2026-09-25 --max-steps 10
+```
+
+The Agent selected values, then reused a stale dynamic DOM index. Index `67` changed after a city panel rerender and pointed to a recommendation card. It briefly navigated to a wrong route:
+
+```text
+Beijing -> Ningbo
+September 9, 2026
+```
+
+It returned to the query page. It did **not** book, create an order, or pay.
+
+Logs:
+
+```text
+logs/ctrip_mvp/20260905_cdp_can-bjs_2026-09-25.log
+logs/ctrip_mvp/20260905_cdp_current_state.txt
+```
+
+#### Guarded retry
+
+The selector-refresh and form whitelist were added. The retry did not click recommendation cards. However, when the search control was blocked by the overly strict whitelist, the free-form Agent guessed list URLs and then a Trip.com URL. This is why the deterministic state-machine replacement is mandatory.
+
+Log:
+
+```text
+logs/ctrip_mvp/20260905_cdp_can-bjs_guarded_retry.log
+```
+
+No booking, order creation, payment, verification handling, or protection bypass occurred.
+
+## 5. Known bugs and next fixes
+
+### A. Free-form Agent is unsafe for a dynamic form
+
+**已架构解决：状态机落地。** 详见 §7.P0 与 `docs/handoff/2026-09-06_CTRIP_FORM_EXECUTOR_IMPLEMENTATION.md`。
+
+`app/ctrip_form_executor.py` 已实现 8 状态有限状态机;每次动作前必 `refresh_state`、按 aria/name/placeholder/xpath 语义定位、逐字段 verify;城市面板缺匹配项直接 ABORT(杜绝 input_text 兜底偷填错城市);`BrowserInterface` Protocol 保证 LLM Agent 拿到的接口只有 `refresh_state/input_text/click/select_date/read_field_value/extract_results` 6 个,无 `gui_action`/`execute_js` 路径。
+
+**仍待解 P1:** 把 `BrowserInterface` 通过 `CtripQueryBrowserAdapter` 接到真实 CDP,然后跑一次端到端验证。
+
+### B. Search button whitelist needs current-page calibration
+
+Observed state showed a search button, but the whitelist required a `/form/` XPath pattern and blocked it during the guarded retry. The actual DOM semantics must be captured read-only and converted to a robust selector/parent-form validation.
+
+Do not weaken this to “any element containing search”. Add a fixture and tests first.
+
+### C. CDP cleanup warnings
+
+Symptoms:
+
+```text
+BrowserContext.close: 'NoneType' object has no attribute 'send'
+RuntimeWarning: coroutine was never awaited
+RuntimeError: Event loop is closed
+```
+
+Cause: `BrowserUseTool.__del__` tries async cleanup while Python is shutting down; browser-use remote CDP cleanup also differs by version.
+
+Fix recommendation:
+
+1. In `__del__`, immediately return when `CTRIP_CDP_URL` is set.
+2. Keep CDP cleanup as detach/no-op.
+3. Add a test.
+4. Never close or kill the attached Chrome merely to suppress a warning.
+
+### D. browser-use version differences
+
+- Current page object does not provide `get_title()`; use title from `get_current_state()`.
+- `get_state()` signatures differ across versions; compatibility code already exists in `app/tool/browser_use_tool.py`.
+
+### E. Windows encoding risk
+
+Use UTF-8 files and `Path.write_text(..., encoding="utf-8")` for Python-generated content. Set:
+
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+```
+
+Avoid complex multiline PowerShell replacement scripts for source code.
+
+### F. Prompt separation
+
+The generic BrowserUseTool documentation still mentions GUI and arbitrary-JS capabilities. The Ctrip tool schema blocks them, but a dedicated form executor should have its own minimal prompt and must not inherit generic browser-action guidance.
+
+## 6. Test and run commands
+
+### Full relevant regression
+
+```powershell
+cd D:\It\Test_Project\Openmanus-Project\upstream\manus-gui
+$env:PYTHONIOENCODING = 'utf-8'
+
+.\.venv\Scripts\python.exe -m pytest -q `
+  tests\test_browser_state_compat.py `
+  tests\test_ctrip_policy.py `
+  tests\test_ctrip_query_tool.py `
+  tests\test_ctrip_click_whitelist.py `
+  tests\test_ctrip_cdp_setup.py `
+  tests\test_ctrip_flights.py `
+  tests\test_ctrip_legacy_fixture.py `
+  tests\test_llm_retry_policy.py `
+  tests\test_dashscope_key_resolution.py
+```
+
+Recent checkpoints: 21 passed, then 16 passed, then 13 passed after the most recent form-whitelist changes. Expected non-blocking warnings: Pydantic configuration, `underscore_attrs_are_private`, faiss AVX2 fallback, and browser-use telemetry.
+
+### Offline report demo
+
+```powershell
+.\.venv\Scripts\python.exe .\ctrip_flight_report.py `
+  --html .\tests\fixtures\ctrip\legacy_sha_bjs_result_20260121.html `
+  --sort-by price --max-price 850 --limit 5
+```
+
+### CDP preflight
+
+```powershell
+.\scripts\start_ctrip_cdp_chrome.ps1
+# User logs in manually in the opened dedicated Chrome.
+$env:CTRIP_CDP_URL = 'http://127.0.0.1:9222'
+.\.venv\Scripts\python.exe .\scripts\test_ctrip_cdp_connection.py
+```
+
+Never set `CTRIP_CDP_URL` to a non-loopback address.
+
+## 7. Next-Agent work order
+
+### P0: stable query executor
+
+**状态：已完成实现并落单测。** 详细交接见 `docs/handoff/2026-09-06_CTRIP_FORM_EXECUTOR_IMPLEMENTATION.md`。下面是精简版的"还差什么":
+
+1. ~~Read this document plus~~ 已读 + 新增了 §执行器文档。
+2. ~~Run the regression suite~~ 19+20=39 项通过（`tests/test_ctrip_form_executor.py` + 既有回归）。
+3. ~~Implement `app/ctrip_form_executor.py` as deterministic state machine~~ ✅。
+4. Collect the current search form element metadata via read-only CDP. —— **P1，未做**。
+5. ~~Build mock browser-context fixtures for DOM rerender, stale index, wrong-city option, wrong date, and missing search button~~ ✅（`MockBrowserContext` + 19 单测覆盖所有这五类故障模式）。
+6. ~~Only after all deterministic checks pass, run one short CDP query test~~ 待下一步执行（依赖 §4）。
+7. Extract result data only and feed it into `FlightOption` parsing/ranking. —— `extract_results()` 已经把 `(visible_text, raw_html)` 落到 `FormExecutorReport`，下一步接到 `app/ctrip_flights.py` 即可。
+
+### P1: result robustness
+
+- Add de-identified fixtures for Guangzhou -> Beijing, cross-day arrival, transfer/stops, missing price, and multiple cabin types.
+- Add `source_url`, `observed_at`, `is_live`, `missing_fields`, and `human_takeover_required` to result schema.
+- Produce JSON and Markdown reports.
+
+### P2: interview deliverables
+
+- architecture diagram;
+- demo scripts for offline success, CDP preflight, protection-page stop, and stale-index prevention;
+- failure postmortem and test coverage narrative;
+- clear distinction between search/recommendation automation and transaction automation;
+- RAG policy: static knowledge allowed, live transactional data forbidden.
+
+## 8. Git/workspace state
+
+Current branch:
+
+```text
+main
+```
+
+There are many **uncommitted** changes from previous work: RAG, model config, browser compatibility, Ctrip MVP, fixtures, tests, scripts, and handoff docs.
+
+The next Agent must:
+
+- run `git status --short` first;
+- never use `git reset --hard`;
+- never overwrite/read/print `.env`;
+- never put a real key into TOML/source;
+- preferably create `codex/ctrip-form-state-machine` before implementing the executor;
+- commit in small logical groups: policy, executor, fixtures/tests, result/report, docs.
+
+## 9. Handover conclusion
+
+This is no longer an empty prototype. It has working model configuration, safe key resolution, a Chroma/RAG base, browser-use compatibility work, CDP preflight, user-visible Chrome attach, a least-privilege Ctrip policy, protection-page stopping, offline parsing/ranking, historical fixtures, and regression tests.
+
+The primary blocker is not API authentication or Ctrip login. It is this:
+
+```text
+A dynamic web form cannot safely be driven by a free-form LLM Agent reusing DOM indexes.
+```
+
+The correct next implementation is a deterministic, verifiable, replayable form state machine. Do not redirect the project toward automated ordering or bypassing Ctrip protection.

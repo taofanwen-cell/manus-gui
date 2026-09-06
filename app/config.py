@@ -9,6 +9,52 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+def _read_dotenv_value(dotenv_path: Path, name: str) -> str:
+    """Read one simple KEY=VALUE entry without a dotenv dependency."""
+    try:
+        for raw_line in dotenv_path.read_text(encoding="utf-8-sig").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key.strip().removeprefix("export ").strip() != name:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                value = value[1:-1]
+            return value.strip()
+    except OSError:
+        pass
+    return ""
+
+
+def resolve_dashscope_api_key(project_root: Path) -> str:
+    """Resolve DashScope credentials without putting a secret in TOML/source.
+
+    Source order: project `.env`, optional user-only key file, then the process
+    environment. This lets Codex/GUI runs share a deliberate local credential
+    source instead of relying on a separate terminal's inherited environment.
+    """
+    dotenv_key = _read_dotenv_value(project_root / ".env", "DASHSCOPE_API_KEY")
+    if dotenv_key:
+        return dotenv_key
+
+    configured_path = os.getenv("DASHSCOPE_API_KEY_FILE_PATH")
+    key_file = (
+        Path(configured_path).expanduser()
+        if configured_path
+        else project_root / "config" / ".dashscope_api_key"
+    )
+    try:
+        if key_file.is_file():
+            key = key_file.read_text(encoding="utf-8-sig").strip()
+            if key:
+                return key
+    except OSError:
+        pass
+    return os.getenv("DASHSCOPE_API_KEY", "").strip()
+
+
 def is_frozen() -> bool:
     """是否运行在 PyInstaller 冻结产物里。"""
     return bool(getattr(sys, "frozen", False))
@@ -420,11 +466,9 @@ class Config:
             k: v for k, v in raw_config.get("llm", {}).items() if isinstance(v, dict)
         }
 
-        # api_key 只从配置文件读（2026-08-20 起不再回退环境变量）。
-        # 为什么去掉环境变量回退：同一个 key 在配置文件和环境变量两处维护，改了一边
-        # 另一边还在，而环境变量优先级更高时会静默盖掉配置值——排查时看配置文件是对的、
-        # 实际生效的却是旧 key，完全看不出来。现在唯一来源就是本文件。
-        api_key = base_llm.get("api_key")
+        # Keep secrets out of config.toml. A user-only local key file is
+        # preferred; DASHSCOPE_API_KEY remains a fallback for CI/temporary use.
+        api_key = base_llm.get("api_key") or resolve_dashscope_api_key(PROJECT_ROOT)
 
         default_settings = {
             "model": base_llm.get("model"),
@@ -583,3 +627,4 @@ class Config:
 
 
 config = Config()
+

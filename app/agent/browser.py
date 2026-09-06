@@ -1,4 +1,4 @@
-import json
+﻿import json
 from typing import TYPE_CHECKING, Optional
 
 from pydantic import Field, model_validator
@@ -8,7 +8,12 @@ from app.logger import logger
 from app.prompt.browser import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import Message, ToolChoice
 from app.tool import BrowserUseTool, Terminate, ToolCollection
-from app.tool.sandbox.sb_browser_tool import SandboxBrowserTool
+try:
+    # Daytona is optional for local-browser MVP runs. Do not make its SDK a
+    # startup dependency when the normal BrowserUseTool is the configured tool.
+    from app.tool.sandbox.sb_browser_tool import SandboxBrowserTool
+except ModuleNotFoundError:
+    SandboxBrowserTool = None
 
 
 # 如果 BrowserAgent 需要 BrowserContextHelper，避免循环导入
@@ -23,10 +28,8 @@ class BrowserContextHelper:
 
     async def get_browser_state(self) -> Optional[dict]:
         browser_tool = self.agent.available_tools.get_tool(BrowserUseTool().name)
-        if not browser_tool:
-            browser_tool = self.agent.available_tools.get_tool(
-                SandboxBrowserTool().name
-            )
+        if not browser_tool and SandboxBrowserTool is not None:
+            browser_tool = self.agent.available_tools.get_tool(SandboxBrowserTool().name)
         if not browser_tool or not hasattr(browser_tool, "get_current_state"):
             logger.warning("BrowserUseTool not found or doesn't have get_current_state")
             return None
@@ -154,3 +157,4 @@ class BrowserAgent(ToolCallAgent):
     async def cleanup(self):
         """通过调用父类清理方法来清理浏览器 agent 资源。"""
         await self.browser_context_helper.cleanup_browser()
+

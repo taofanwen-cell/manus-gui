@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 from typing import Generic, Optional, TypeVar
 
 from browser_use import Browser as BrowserUseBrowser
@@ -11,6 +12,7 @@ from pydantic import Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
 
 from app.config import config
+from app.ctrip_policy import decision as ctrip_policy_decision
 from app.llm import LLM
 from app.logger import logger
 from app.tool.base import BaseTool, ToolResult
@@ -492,6 +494,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
     context: Optional[BrowserContext] = Field(default=None, exclude=True)
     dom_service: Optional[DomService] = Field(default=None, exclude=True)
     web_search_tool: WebSearch = Field(default_factory=WebSearch, exclude=True)
+    ctrip_query_mode: bool = Field(default=False, exclude=True)
 
     # Context for generic functionality
     tool_context: Optional[Context] = Field(default=None, exclude=True)
@@ -507,7 +510,11 @@ class BrowserUseTool(BaseTool, Generic[Context]):
     async def _ensure_browser_initialized(self) -> BrowserContext:
         """确保浏览器和上下文已初始化。"""
         if self.browser is None:
+            # CDP 仅连接用户主动启动的本机可见 Chrome；不启动隐藏浏览器，也不降低安全设置。
+            ctrip_cdp_url = os.getenv("CTRIP_CDP_URL", "").strip()
             browser_config_kwargs = {"headless": False, "disable_security": True}
+            if ctrip_cdp_url:
+                browser_config_kwargs.update({"cdp_url": ctrip_cdp_url, "disable_security": False})
 
             if config.browser_config:
                 from browser_use.browser.browser import ProxySettings
@@ -530,6 +537,10 @@ class BrowserUseTool(BaseTool, Generic[Context]):
                 ]
 
                 for attr in browser_attrs:
+                    # 用户显式授权的 CDP 会话必须保持可见且只使用环境变量地址，
+                    # 不能被通用 config.toml 中的无头或其他 CDP 配置覆盖。
+                    if ctrip_cdp_url and attr in {"headless", "disable_security", "cdp_url"}:
+                        continue
                     value = getattr(config.browser_config, attr, None)
                     if value is not None:
                         if not isinstance(value, list) or value:
@@ -586,6 +597,7 @@ class BrowserUseTool(BaseTool, Generic[Context]):
         task: Optional[str] = None,
         script: Optional[str] = None,
         file_path: Optional[str] = None,
+        ctrip_query_mode: Optional[bool] = None,
         **kwargs,
     ) -> ToolResult:
         """
@@ -610,7 +622,24 @@ class BrowserUseTool(BaseTool, Generic[Context]):
         """
         async with self.lock:
             try:
+                effective_ctrip_query_mode = (
+                    self.ctrip_query_mode if ctrip_query_mode is None else ctrip_query_mode
+                )
+                if effective_ctrip_query_mode:
+                    allowed, reason = ctrip_policy_decision(action, url=url, text=text)
+                    if not allowed:
+                        return ToolResult(error=f"Ctrip query policy blocked action: {reason}")
+
                 context = await self._ensure_browser_initialized()
+
+                if effective_ctrip_query_mode:
+                    current_page = await context.get_current_page()
+                    current_url = getattr(current_page, "url", "")
+                    allowed, reason = ctrip_policy_decision(
+                        action, url=url, text=text, current_url=current_url
+                    )
+                    if not allowed:
+                        return ToolResult(error=f"Ctrip query policy blocked action: {reason}")
 
                 # 从配置中获取最大内容长度
                 max_content_length = getattr(
@@ -1933,7 +1962,15 @@ Page content:
             if not ctx:
                 return ToolResult(error="Browser context not initialized")
 
-            state = await ctx.get_state()
+            # browser-use changed get_state() from a zero-argument call to a
+            # call requiring clickable-element cache hashes. Keep compatibility
+            # with older case code and the installed version.
+            try:
+                state = await ctx.get_state()
+            except TypeError as exc:
+                if "cache_clickable_elements_hashes" not in str(exc):
+                    raise
+                state = await ctx.get_state(cache_clickable_elements_hashes={})
 
             # 如果不存在，创建 viewport_info 字典
             viewport_height = 0
@@ -2010,8 +2047,11 @@ Page content:
         """
         async with self.lock:
             attached = bool(
-                config.browser_config
-                and getattr(config.browser_config, "cdp_url", None)
+                os.getenv("CTRIP_CDP_URL", "").strip()
+                or (
+                    config.browser_config
+                    and getattr(config.browser_config, "cdp_url", None)
+                )
             )
             if attached:
                 # detach：接管别人的浏览器，清理时什么都不做——既不关 context/browser

@@ -15,7 +15,7 @@ from app.prompt.manus import (
     WPS_EXCEL_RULES,
 )
 from app.schema import Message
-from app.tool import Terminate, ToolCollection
+from app.tool import ProjectKnowledgeTool, Terminate, ToolCollection
 from app.tool.ask_human import AskHuman
 from app.tool.browser_use_tool import BrowserUseTool
 from app.tool.computer_use_tool import ComputerUseTool
@@ -59,6 +59,7 @@ class Manus(ToolCallAgent):
             BrowserUseTool(),
             ComputerUseTool(),
             WebSearch(),
+            ProjectKnowledgeTool(),
             StrReplaceEditor(),
             WpsExcelTool(),
             AskHuman(),

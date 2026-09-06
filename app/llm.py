@@ -46,7 +46,14 @@ def _worth_retry_text(exc: BaseException) -> bool:
         Exception（等于什么都重试），这条豁免形同虚设——顺手做实。
     """
     return not isinstance(
-        exc, (BadRequestError, EmptyContentTruncated, TokenLimitExceeded))
+        exc,
+        (
+            AuthenticationError,
+            BadRequestError,
+            EmptyContentTruncated,
+            TokenLimitExceeded,
+        ),
+    )
 
 
 def _worth_retry(exc: BaseException) -> bool:
@@ -64,7 +71,9 @@ def _worth_retry(exc: BaseException) -> bool:
     抬了也没用。带图重发还要把整批 base64 再传一遍（阶段⑬ 单次 11 张图），走满 6 次
     退避比纯文本更贵。
     """
-    return not isinstance(exc, (BadRequestError, EmptyContentTruncated))
+    return not isinstance(
+        exc, (AuthenticationError, BadRequestError, EmptyContentTruncated)
+    )
 
 
 # 截断返空时就地重发用的额度倍数。1.5 是够用的经验值：deepseek 档配 32000，抬到
@@ -133,6 +142,7 @@ MULTIMODAL_MODELS = [
     "qwen-vl-max",  # DashScope 视觉模型
     "qwen/qwen2.5-vl-72b-instruct",  # DashScope 视觉模型
     "qwen3-vl-plus",  # DashScope 视觉模型（同款图片匹配用；不加则 ask 丢图、ask_with_images 抛 ValueError）
+    "gui-plus",  # DashScope GUI-Plus 视觉模型（截图/坐标分析）
     # 主模型 qwen3.7-plus 也是多模态：2026-07-03 对 DashScope 端点实发商品图，能准确
     # 描述图中主体（颜色/形状/品类）。此前误判为纯文本，导致 ask 静默丢图、每次文本调用
     # 还误报"does NOT support images"。加入后：视觉档/GUI 档（均配 qwen3.7-plus）真正可用，
@@ -1009,9 +1019,9 @@ class LLM:
     @retry(
         wait=wait_random_exponential(min=1, max=60),
         stop=stop_after_attempt(6),
-        retry=retry_if_exception_type(
-            (OpenAIError, Exception, ValueError)
-        ),  # Don't retry TokenLimitExceeded
+        # Authentication/400/token-limit failures are deterministic and must
+        # not be retried; retry only transient API/network failures.
+        retry=retry_if_exception(_worth_retry_text),
     )
     async def ask_tool(
         self,

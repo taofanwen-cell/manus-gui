@@ -225,3 +225,10 @@ node_modules
 
 # Windows 误重定向产生的伪文件（NUL 设备被当成文件写入）
 /NUL
+
+# Local DashScope credential file (never commit).
+config/.dashscope_api_key
+
+# Local Chrome profile used only for user-authorized Ctrip CDP sessions.
+runtime/ctrip-cdp-chrome-profile/
+
