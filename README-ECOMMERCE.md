@@ -1,11 +1,11 @@
 # 拼多多竞品调研 API
 
+[![CI](https://github.com/ckenkuo/manus-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/ckenkuo/manus-gui/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-160%20passed-brightgreen.svg)](#测试)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> 基于 CDP 反爬 + FastAPI 服务化的多品牌拼多多蓝牙耳机竞品横向对比工具，含价格分档、卖点聚合、单品销量、详情页字段增强、可选 LLM 业务洞察、深色大屏 ECharts 前端。160 个单测零回归。
+> 基于 CDP 反爬 + FastAPI 服务化的多品牌拼多多蓝牙耳机竞品横向对比工具，含价格分档、卖点聚合、单品销量、详情页字段增强、可选 LLM 业务洞察、深色大屏 ECharts 前端。163 个单测零回归。
 
 ---
 
@@ -19,7 +19,7 @@
 | **服务化** | FastAPI + Pydantic schema 收口 + CORS + 静态资源 mount |
 | **可选 LLM** | DashScope (OpenAI 兼容) + 网络失败自动降级 StubInsightGenerator |
 | **Web 前端** | 单文件深色大屏 ECharts (4 视图), 离线可用, 零构建链 |
-| **测试守护** | 160 个 pytest 用例, sandbox 离线可跑 (不需真实 CDP / LLM key) |
+| **测试守护** | 163 个 pytest 用例, sandbox/CI 离线可跑 (不需真实 CDP / LLM key) |
 
 ---
 
@@ -123,18 +123,17 @@ curl -X POST http://127.0.0.1:8001/api/competitor-report \
 ```bash
 cd upstream/manus-gui
 ./.venv/Scripts/python.exe -m pytest -q tests/test_ecommerce_*.py
-# → 160 passed
+# → 163 passed
 ```
 
-涵盖:
+涵盖 (CI 在 ubuntu + py3.11 上跑同一组命令):
 - `test_ecommerce_analyzer.py` (29) — 过滤/排序/价格分布/聚合
 - `test_ecommerce_url_query.py` (41) — 拼多多 URL 构造 + 自然语言解析
 - `test_ecommerce_pdd_parser.py` (39) — `window.rawData` 提取 + 销量文案
 - `test_ecommerce_pdd_detail.py` (10) — 详情页 3 种销量文案 + 店铺名/评论数
 - `test_ecommerce_brand_compare.py` (5) — 6 品牌压行
-- `test_ecommerce_insight.py` (8) — 4 段洞察 + LLM 兜底
+- `test_ecommerce_insight.py` (21) — 4 段洞察 + LLM 兜底链路
 - `test_ecommerce_api.py` (18) — FastAPI 端点 + CORS + schema
-- `test_ecommerce_policy.py` (~10) — 防写入策略
 
 **不跑** `test_ctrip_cdp_setup.py` / `test_pdd_cdp_*.py` (要真实 Chrome + 桌面 CDP 通道)。
 
@@ -199,7 +198,7 @@ upstream/manus-gui/
 ### 5. 测试在 sandbox 离线可跑
 - `FileHTMLSource` 默认从 `data/` 读 HTML, 不发起网络请求
 - LLM 走 Stub, 不绑 API key
-- 测试 160 个零依赖外部资源, 可直接接 CI
+- 测试 163 个零依赖外部资源, 已接 GitHub Actions CI
 
 ---
 

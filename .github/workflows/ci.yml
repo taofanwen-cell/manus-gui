@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-ecommerce.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-ecommerce.txt
+
+      # 电商子集 163 用例: FileHTMLSource 离线读 fixtures + LLM 走 stub,
+      # 不需要真实 Chrome / CDP / API key, 在 ubuntu runner 上可直接跑。
+      # test_ctrip_* / test_pdd_cdp_* 需要桌面 CDP 通道, 不进 CI。
+      - name: Run ecommerce tests
+        run: pytest -q tests/test_ecommerce_*.py
