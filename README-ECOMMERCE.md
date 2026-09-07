@@ -30,7 +30,22 @@
 - Python 3.11+ (项目在 `.venv/` 已装好)
 - 一个能登录拼多多 PC 版的 Chrome
 
-### 2. 启服务 (离线 HTML 已就绪则直接 0 步)
+### 1. 一键 demo (推荐)
+
+```bash
+cd upstream/manus-gui
+bash scripts/demo.sh                 # 正常流程 (有 data/ HTML 就直接出报告)
+# 或:
+PDD_SKIP_SCAN=1 bash scripts/demo.sh # data/ 已有 HTML → 跳过扫描直接出报告
+PORT=8765 bash scripts/demo.sh       # 自定义端口
+
+# 停止服务:
+bash scripts/stop_demo.sh            # 跨平台 (Win/Mac/Linux 都行)
+```
+
+`demo.sh` 自动做 4 件事: ① 检测本机 CDP Chrome (在线则跑扫描) → ② 启 FastAPI 后台 → ③ 等健康检查 → ④ 打开浏览器。
+
+### 2. 手动步骤 (如果你想自己控每一步)
 
 ```bash
 cd upstream/manus-gui
@@ -38,8 +53,6 @@ cd upstream/manus-gui
 # → 浏览器打开 http://127.0.0.1:8001
 # → Swagger: http://127.0.0.1:8001/docs
 ```
-
-如果你 `data/` 下有现成 `pdd_raw_<品牌>_*.html`，**无需任何网络** 直接出报告。
 
 ### 1. 离线准备 (可选, 5 分钟扫一次)
 
