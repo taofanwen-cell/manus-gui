@@ -68,7 +68,8 @@ def _brand_row(brand: str, rep, n_parsed: int) -> dict:
     ``top_keywords`` (list[dict], 给 insight 层做卖点空缺分析).
     """
     pd = rep.price_dist
-    kw = rep.top_keywords[:3]
+    # 词云要用所有特征词的频次聚合, 取 top10 给前端合并去重; markdown 报告仍只显示 TOP3
+    kw = rep.top_keywords[:10]
     top = rep.top_competitors[0] if rep.top_competitors else None
     return {
         "brand": brand,

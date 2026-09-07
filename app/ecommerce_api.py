@@ -189,16 +189,9 @@ def _to_brand_row_dict(row: dict) -> CompetitorBrandRow:
 
     这里集中做字段映射, 端点/insight 调用方只用友好名.
     """
-    kw_short = (
-        row.get("kw1"),
-        row.get("kw2"),
-        row.get("kw3"),
-    )
-    top_keywords = [
-        {"keyword": k, "count": 0, "pct": 0.0}
-        for k in kw_short
-        if k and k != "—"
-    ]
+    # top_keywords: 直接复用 _brand_row 已聚合的 list (含真实 count/pct)
+    # 不再从 kw1/kw2/kw3 拼空 list —— 那样词云/卖点横向柱会全是 0.
+    top_keywords = list(row.get("top_keywords", []))
     return CompetitorBrandRow(
         brand=row["brand"],
         median=row.get("median"),
