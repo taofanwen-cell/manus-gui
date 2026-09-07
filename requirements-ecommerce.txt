@@ -1,0 +1,22 @@
+# 拼多多竞品调研模块 — 最小依赖
+# (整个 monorepo 的全家桶见 ../requirements.txt; 本文件只装跑电商子集+测试所需的)
+
+# FastAPI 服务 + 数据 schema
+pydantic>=2.5,<3
+fastapi>=0.110
+uvicorn>=0.27
+
+# CDP 反爬脚本
+playwright>=1.40
+
+# 业务洞察: DashScope LLM (OpenAI 兼容接口) + 兜底
+openai>=1.0
+
+# HTTP client (FastAPI 测试 + 脚本兜底)
+httpx>=0.27
+
+# 测试
+pytest>=8.0
+pytest-asyncio>=0.23
+
+# 业务洞察配置: 模板字符串 / dict / 等内置够用, 无第三方依赖
