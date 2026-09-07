@@ -266,17 +266,27 @@ def _insight_price_spread(rows: list[dict]) -> Insight:
 
 
 def _insight_warnings(rows: list[dict]) -> list[Insight]:
-    """数据质量警告 — 谁缺店铺/谁的 warning 里写了什么."""
+    """数据质量警告 — 谁缺店铺/谁的 warning 里写了什么.
+
+    **去重**: 同一个 warning 文本(跨品牌完全相同)只输出第一条, 避免"20/20 缺评分"
+    在 6 个品牌上重复刷屏. 第一条加 "(N 个品牌)" 提示.
+    """
     out: list[Insight] = []
+    seen: dict[str, tuple[str, list[str]]] = {}  # warning_text -> (first_brand, all_brands)
     for r in rows:
-        # 过滤 None/空串 (rows 序列化时可能出现)
-        ws = [w for w in (r.get("warnings") or []) if w][:2]
-        for w in ws:
-            out.append(Insight(
-                "warning",
-                f"【数据限制】 {r['brand']}: {w}",
-                (("品牌", r["brand"]), ("warning", w)),
-            ))
+        for w in [w for w in (r.get("warnings") or []) if w][:2]:
+            if w not in seen:
+                seen[w] = (r["brand"], [r["brand"]])
+            else:
+                seen[w][1].append(r["brand"])
+    for w, (first_brand, brands) in seen.items():
+        if len(brands) > 1:
+            body = f"【数据限制】 {w} (覆盖 {len(brands)} 个品牌: {', '.join(brands)})"
+            evidence = (("warning", w), ("覆盖品牌", f"{len(brands)}/{len(rows)}"))
+        else:
+            body = f"【数据限制】 {first_brand}: {w}"
+            evidence = (("品牌", first_brand), ("warning", w))
+        out.append(Insight("warning", body, evidence))
     return out
 
 

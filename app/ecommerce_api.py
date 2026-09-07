@@ -39,6 +39,13 @@ from app.ecommerce_pdd_parser import extract_competitors
 
 
 # ---------------------------------------------------------------------------
+# 常量
+# ---------------------------------------------------------------------------
+
+DEFAULT_BRANDS = ("华为", "小米", "倍思", "QCY", "万魔", "漫步者")
+
+
+# ---------------------------------------------------------------------------
 # 协议: HTML 源 (默认离线 - 接受 path; 真实 CDP 单测外)
 # ---------------------------------------------------------------------------
 
@@ -51,30 +58,53 @@ class HTMLSource(Protocol):
 
 
 class FileHTMLSource:
-    """从 ``data/pdd_raw_<keyword>.html`` 读 HTML. 默认 sandbox 模式.
+    """从 ``data/pdd_raw_<brand>_<timestamp>.html`` 读 HTML. 默认 sandbox 模式.
 
     用于"预先离线扫好 HTML → API 分析"的场景.
+
+    关键约定
+    --------
+    ``fetch(keyword)`` 收到形如 ``"华为蓝牙耳机"`` / ``"漫步者 蓝牙耳机"`` 的 keyword,
+    反推出**品牌名**(剥后缀), 再在 ``data/`` 下找 ``pdd_raw_<brand>_*.html`` 最近一个.
+    找不到返回 ``FileNotFoundError`` — 端点会把这条放到 warnings 里, 不应让整次分析 500.
     """
 
-    def __init__(self, data_dir: Path | None = None):
+    DEFAULT_SUFFIX = ("蓝牙耳机", "耳机", "earphone")
+    DEFAULT_BRAND_KEYWORDS = DEFAULT_BRANDS
+
+    def __init__(
+        self,
+        data_dir: Path | None = None,
+        brand_keywords: Iterable[str] | None = None,
+    ):
         self.data_dir = data_dir or Path("data")
+        self.brand_keywords = tuple(brand_keywords) if brand_keywords else self.DEFAULT_BRAND_KEYWORDS
 
     def fetch(self, keyword: str) -> str:
-        # 优先带时间戳: data/pdd_raw_<keyword>_20260907T172550.html
+        brand = self._detect_brand(keyword)
+        if brand is None:
+            raise FileNotFoundError(f"无法从 keyword {keyword!r} 推出品牌名")
         candidates = sorted(
-            self.data_dir.glob(f"pdd_raw_{keyword}_*.html"),
+            self.data_dir.glob(f"pdd_raw_{brand}_*.html"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
         if not candidates:
-            candidates = sorted(
-                self.data_dir.glob(f"pdd_raw_*.html"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
+            raise FileNotFoundError(
+                f"data/ 下找不到品牌 {brand!r} 的 HTML 扫描文件 (用了 keyword={keyword!r})"
             )
-        if not candidates:
-            raise FileNotFoundError(f"data/ 下找不到 {keyword} 的 HTML 扫描文件")
         return candidates[0].read_text(encoding="utf-8", errors="replace")
+
+    def _detect_brand(self, keyword: str) -> str | None:
+        """已知品牌优先匹配 (避免品牌名是另一个品牌子串时的误判)."""
+        for brand in self.brand_keywords:
+            if brand in keyword:
+                return brand
+        # fallback: 剥已知后缀 (默认 "蓝牙耳机")
+        for suf in self.DEFAULT_SUFFIX:
+            if keyword.endswith(suf):
+                return keyword[: -len(suf)].strip()
+        return None
 
 
 # ---------------------------------------------------------------------------

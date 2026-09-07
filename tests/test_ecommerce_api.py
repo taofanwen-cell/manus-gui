@@ -277,16 +277,50 @@ class TestBuildReportDirect:
 
 class TestFileHTMLSource:
     def test_picks_latest_by_mtime(self, tmp_path: Path):
-        # 写两个文件, 第二个更新, 应该取第二个
+        # 写两个华为 HTML 文件, 第二个 mtime 更新, fetch("华为蓝牙耳机") 取最新那个
         d = tmp_path / "data"
         d.mkdir()
-        (d / "pdd_raw_test_20260101T000000.html").write_text(_make_html("test", 3), encoding="utf-8")
-        (d / "pdd_raw_test_20260201T000000.html").write_text(_make_html("test2", 5), encoding="utf-8")
-        # touch 第二个文件让它 mtime 更新
-        (d / "pdd_raw_test_20260201T000000.html").write_text(
-            _make_html("test2", 5), encoding="utf-8"
+        (d / "pdd_raw_华为_20260101T000000.html").write_text(_make_html("华为v1", 3), encoding="utf-8")
+        (d / "pdd_raw_华为_20260201T000000.html").write_text(_make_html("华为v2", 5), encoding="utf-8")
+        # touch 第二个让它 mtime 更新
+        (d / "pdd_raw_华为_20260201T000000.html").write_text(
+            _make_html("华为v2", 5), encoding="utf-8"
         )
         src = FileHTMLSource(d)
-        html = src.fetch("test")
-        assert "test2" in html  # 取到了最新那个
+        html = src.fetch("华为蓝牙耳机")
+        assert "华为v2" in html  # mtime 最新的那个
         assert "goodsID" in html
+
+    def test_detect_brand_from_keyword_suffix(self, tmp_path: Path):
+        """关键回归: keyword='华为蓝牙耳机' 必须推出 brand='华为', 不再返回所有 glob 第一份."""
+        d = tmp_path / "data"
+        d.mkdir()
+        # 写两个品牌的 HTML
+        (d / "pdd_raw_华为_20260101.html").write_text(
+            _make_html("华为", 3), encoding="utf-8"
+        )
+        (d / "pdd_raw_小米_20260201.html").write_text(
+            _make_html("小米", 4), encoding="utf-8"
+        )
+        # touch 小米 让它更新
+        (d / "pdd_raw_小米_20260201.html").write_text(
+            _make_html("小米", 4), encoding="utf-8"
+        )
+        src = FileHTMLSource(d)
+        # 小米 keyword 应该拿到小米的 HTML, 不是华为的
+        html_xiaomi = src.fetch("小米蓝牙耳机")
+        assert "小米" in html_xiaomi
+        assert "小米测试耳机" in html_xiaomi
+        # 华为 keyword 应该拿到华为的 HTML
+        html_huawei = src.fetch("华为蓝牙耳机")
+        assert "华为" in html_huawei
+        assert "华为测试耳机" in html_huawei
+        # 两个 HTML 不一样 — 这是核心回归点
+        assert html_xiaomi != html_huawei
+
+    def test_unknown_brand_raises_filenotfound(self, tmp_path: Path):
+        d = tmp_path / "data"
+        d.mkdir()
+        src = FileHTMLSource(d)
+        with pytest.raises(FileNotFoundError):
+            src.fetch("完全不存在的品牌蓝牙耳机")

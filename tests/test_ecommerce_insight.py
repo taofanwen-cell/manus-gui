@@ -161,6 +161,18 @@ class TestStubGenerator:
         assert len(warnings) == 1
         assert "20/20 缺评分" in warnings[0].body
 
+    def test_warnings_dedup_across_brands(self):
+        # 6 品牌都报同一个 warning → 只一条, 标注 "(覆盖 6 个品牌)"
+        rows = [
+            _row(f"brand{i}", 100, warnings=["20/20 缺评分"])
+            for i in range(6)
+        ]
+        ins = StubInsightGenerator().generate(rows)
+        warnings = [i for i in ins if i.kind == "warning"]
+        assert len(warnings) == 1
+        assert "覆盖 6 个品牌" in warnings[0].body
+        assert "20/20 缺评分" in warnings[0].body
+
     def test_spread_when_only_one_priced(self):
         rows = [_row("A", None), _row("B", None)]
         spread = _insight_price_spread(rows)
