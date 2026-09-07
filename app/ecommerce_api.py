@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ecommerce_analyzer import AnalysisPreference, analyze
 from app.ecommerce_insight import (
@@ -116,6 +116,20 @@ DEFAULT_BRANDS = ("华为", "小米", "倍思", "QCY", "万魔", "漫步者")
 
 class CompetitorReportRequest(BaseModel):
     """POST /api/competitor-report 请求体."""
+
+    # Swagger "Try it out" 默认预填真实品牌, 避免用户误用占位符 "string"
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "brands": list(DEFAULT_BRANDS),
+                    "top_n": 20,
+                    "include_insights": True,
+                    "keyword_template": "{brand}蓝牙耳机",
+                }
+            ]
+        }
+    )
 
     brands: list[str] = Field(
         default_factory=lambda: list(DEFAULT_BRANDS),
