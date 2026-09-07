@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-bs-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <title>拼多多竞品调研 · Web UI</title>
+  <link rel="stylesheet" href="/static/bootstrap.min.css">
+  <style>
+    body { background: #f5f7fa; }
+    .brand-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; margin: 4px;
+      background: #e0e7ff; color: #3730a3; border-radius: 16px; font-size: 14px;
+    }
+    .brand-chip .x { cursor: pointer; opacity: 0.6; }
+    .brand-chip .x:hover { opacity: 1; }
+    .insight-card { border-left: 4px solid; margin-bottom: 12px; padding: 12px 16px; background: white; border-radius: 6px; }
+    .insight-tier { border-color: #3b82f6; }
+    .insight-gap { border-color: #8b5cf6; }
+    .insight-hot { border-color: #f59e0b; }
+    .insight-warning { border-color: #ef4444; }
+    .insight-tier .badge { background: #3b82f6; }
+    .insight-gap .badge { background: #8b5cf6; }
+    .insight-hot .badge { background: #f59e0b; }
+    .insight-warning .badge { background: #ef4444; }
+    .price-bar {
+      display: flex; height: 28px; border-radius: 4px; overflow: hidden; margin: 8px 0;
+    }
+    .price-bar > div { display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 600; }
+    .pb-1 { background: #10b981; }
+    .pb-2 { background: #3b82f6; }
+    .pb-3 { background: #f59e0b; }
+    .pb-4 { background: #ef4444; }
+    .kw-pill {
+      display: inline-block; padding: 2px 8px; margin: 2px;
+      background: #f1f5f9; color: #475569; border-radius: 4px; font-size: 12px;
+    }
+    .stat-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dashed #e2e8f0; font-size: 14px; }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-row .lbl { color: #64748b; }
+    .stat-row .val { font-weight: 600; color: #0f172a; }
+    .empty-state { text-align: center; padding: 60px 20px; color: #94a3b8; }
+    #error-box { display: none; }
+    .spinner-wrap { display: none; }
+    .spinner-wrap.show { display: flex; }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-dark bg-primary">
+    <div class="container">
+      <span class="navbar-brand mb-0 h1">🎧 拼多多竞品调研</span>
+      <span class="navbar-text text-white-50">蓝牙耳机 · 6 品牌横向对比</span>
+    </div>
+  </nav>
+
+  <div class="container py-4">
+    <!-- 控制区 -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <h5 class="card-title mb-3">① 选品牌</h5>
+        <div id="brand-list" class="mb-3"></div>
+        <div class="input-group mb-3" style="max-width: 360px;">
+          <input type="text" id="custom-brand" class="form-control" placeholder="加自定义品牌 (如: OPPO)" maxlength="20">
+          <button class="btn btn-outline-primary" id="add-brand-btn">+ 添加</button>
+        </div>
+        <button class="btn btn-primary btn-lg" id="generate-btn">② 生成报告</button>
+        <span class="spinner-wrap ms-3 align-middle" id="loading">
+          <span class="spinner-border spinner-border-sm text-primary"></span>
+          <span class="ms-2 text-muted">正在分析...</span>
+        </span>
+      </div>
+    </div>
+
+    <!-- 错误显示 -->
+    <div class="alert alert-danger" id="error-box" role="alert"></div>
+
+    <!-- 业务洞察 -->
+    <div class="mb-4" id="insights-section" style="display: none;">
+      <h4 class="mb-3">💡 业务洞察</h4>
+      <div id="insights-list"></div>
+    </div>
+
+    <!-- 品牌数据卡片 -->
+    <div class="mb-4" id="brands-section" style="display: none;">
+      <h4 class="mb-3">📊 各品牌数据</h4>
+      <div class="row g-3" id="brands-grid"></div>
+    </div>
+
+    <!-- 初始空状态 -->
+    <div class="empty-state" id="empty-state">
+      <h3>👆 选品牌 → 点"生成报告"</h3>
+      <p class="text-muted">默认 6 品牌（华为/小米/倍思/QCY/万魔/漫步者），可加自定义</p>
+    </div>
+  </div>
+
+  <footer class="container text-center text-muted py-3" style="font-size: 12px;">
+    FastAPI · Pydantic · Playwright CDP · pytest (160+ 单测) · 数据来源: 拼多多搜索列表真实数据
+  </footer>
+
+  <script src="/static/bootstrap.bundle.min.js"></script>
+  <script>
+  const DEFAULT_BRANDS = ['华为', '小米', '倍思', 'QCY', '万魔', '漫步者'];
+  const selected = new Set(DEFAULT_BRANDS);
+  const $ = (id) => document.getElementById(id);
+
+  function renderBrandList() {
+    const el = $('brand-list');
+    el.innerHTML = '';
+    selected.forEach(b => {
+      const chip = document.createElement('span');
+      chip.className = 'brand-chip';
+      chip.innerHTML = `${b} <span class="x" data-brand="${b}">×</span>`;
+      el.appendChild(chip);
+    });
+    el.querySelectorAll('.x').forEach(x => {
+      x.onclick = () => { selected.delete(x.dataset.brand); renderBrandList(); };
+    });
+  }
+
+  function addBrand(b) {
+    b = b.trim();
+    if (!b || selected.has(b)) return false;
+    selected.add(b);
+    return true;
+  }
+
+  $('add-brand-btn').onclick = () => {
+    const input = $('custom-brand');
+    if (addBrand(input.value)) { input.value = ''; renderBrandList(); }
+  };
+  $('custom-brand').addEventListener('keypress', e => {
+    if (e.key === 'Enter') $('add-brand-btn').click();
+  });
+
+  $('generate-btn').onclick = generate;
+
+  function showLoading(on) {
+    $('loading').classList.toggle('show', on);
+    $('generate-btn').disabled = on;
+  }
+  function showError(msg) {
+    if (!msg) { $('error-box').style.display = 'none'; return; }
+    $('error-box').textContent = '❌ ' + msg;
+    $('error-box').style.display = 'block';
+  }
+
+  function fmtWan(n) {
+    if (n == null) return '—';
+    if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+    return String(n);
+  }
+
+  function renderReport(data) {
+    showError('');
+    $('empty-state').style.display = 'none';
+    // insights
+    $('insights-section').style.display = 'block';
+    const insList = $('insights-list');
+    insList.innerHTML = '';
+    (data.insights || []).forEach(ins => {
+      const div = document.createElement('div');
+      div.className = 'insight-card insight-' + (ins.kind || 'tier');
+      const badgeText = { tier: '梯队', gap: '空缺', hot: '热度', warning: '警告' }[ins.kind] || ins.kind;
+      div.innerHTML = `<span class="badge me-2">${badgeText}</span> ${ins.body}`;
+      insList.appendChild(div);
+    });
+    if (!data.insights || !data.insights.length) {
+      insList.innerHTML = '<div class="text-muted">本次报告未生成业务洞察</div>';
+    }
+    // 警告
+    (data.warnings || []).forEach(w => {
+      const div = document.createElement('div');
+      div.className = 'insight-card insight-warning';
+      div.innerHTML = `<span class="badge me-2">数据</span> ${w}`;
+      insList.appendChild(div);
+    });
+    // 品牌卡片
+    $('brands-section').style.display = 'block';
+    const grid = $('brands-grid');
+    grid.innerHTML = '';
+    (data.rows || []).forEach(row => {
+      const total = (row.bucket_under_100 || 0) + (row.bucket_100_300 || 0) + (row.bucket_300_800 || 0) + (row.bucket_over_800 || 0) || 1;
+      const card = document.createElement('div');
+      card.className = 'col-md-6 col-lg-4';
+      card.innerHTML = `
+        <div class="card h-100 shadow-sm">
+          <div class="card-body">
+            <h5 class="card-title">${row.brand}</h5>
+            <div class="text-muted" style="font-size: 12px;">样本 ${row.sample_size} 个商品</div>
+            <hr class="my-2">
+            <div class="stat-row"><span class="lbl">价格中位数</span><span class="val">¥${row.median ?? '—'}</span></div>
+            <div class="stat-row"><span class="lbl">价格区间</span><span class="val">¥${row.min ?? '—'} ~ ¥${row.max ?? '—'}</span></div>
+            <div class="stat-row"><span class="lbl">销量冠军</span><span class="val" title="${row.top_product || ''}">${(row.top_product || '—').slice(0, 18)}${(row.top_product||'').length > 18 ? '…' : ''}</span></div>
+            <div class="stat-row"><span class="lbl">单品销量</span><span class="val">${fmtWan(row.top_sales)}</span></div>
+            <div class="stat-row"><span class="lbl">评论数</span><span class="val">${fmtWan(row.comment_count)}</span></div>
+            <div class="stat-row"><span class="lbl">店铺</span><span class="val">${row.shop_name || '—'}</span></div>
+            <hr class="my-2">
+            <div style="font-size: 12px; color: #64748b; margin-bottom: 4px;">价格分档 (${row.filtered_size} 个)</div>
+            <div class="price-bar">
+              <div class="pb-1" style="width: ${(row.bucket_under_100/total*100).toFixed(1)}%">${row.bucket_under_100||0}</div>
+              <div class="pb-2" style="width: ${(row.bucket_100_300/total*100).toFixed(1)}%">${row.bucket_100_300||0}</div>
+              <div class="pb-3" style="width: ${(row.bucket_300_800/total*100).toFixed(1)}%">${row.bucket_300_800||0}</div>
+              <div class="pb-4" style="width: ${(row.bucket_over_800/total*100).toFixed(1)}%">${row.bucket_over_800||0}</div>
+            </div>
+            <div style="font-size: 12px; color: #64748b; margin: 8px 0 4px;">高频卖点</div>
+            <div>${(row.top_keywords||[]).slice(0,5).map(k => `<span class="kw-pill">${k.keyword} · ${k.count}</span>`).join('') || '<span class="text-muted">无</span>'}</div>
+          </div>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  async function generate() {
+    const brands = [...selected];
+    if (!brands.length) { showError('请至少选 1 个品牌'); return; }
+    showError('');
+    showLoading(true);
+    try {
+      const resp = await fetch('/api/competitor-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brands, top_n: 20, include_insights: true }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        const msg = err.detail?.msg || err.detail || ('HTTP ' + resp.status);
+        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      }
+      const data = await resp.json();
+      if (!data.rows || !data.rows.length) {
+        throw new Error('没有拿到数据。warnings: ' + (data.warnings || []).join('; ') + '。请确认 data/ 下有这些品牌的 HTML 扫描文件。');
+      }
+      renderReport(data);
+    } catch (e) {
+      showError(e.message);
+    } finally {
+      showLoading(false);
+    }
+  }
+
+  renderBrandList();
+  </script>
+</body>
+</html>

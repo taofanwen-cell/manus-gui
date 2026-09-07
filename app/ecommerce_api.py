@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ecommerce_analyzer import AnalysisPreference, analyze
@@ -311,6 +313,24 @@ def create_app(
             "默认离线读 data/ 下的 HTML 扫描结果, 不发起网络请求。"
         ),
     )
+    # CORS: 让 static/index.html 用 file:// 打开也能调 API
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    # 根路径返回单文件 Web 前端 (static/index.html)
+    _STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+    # 静态资源 (bootstrap / marked / 自定义 css) 走 /static/...
+    from fastapi.staticfiles import StaticFiles  # 局部 import, 避免无静态目录时 import 报错
+    if _STATIC_DIR.is_dir():
+        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def index() -> FileResponse:
+        return FileResponse(_STATIC_DIR / "index.html")
+
     # 用闭包捕获注入的依赖
     _html = html_source
     _gen = insight_gen
