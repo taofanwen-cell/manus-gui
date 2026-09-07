@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,14 @@ from app.ecommerce_analyzer import AnalysisPreference, analyze  # noqa: E402
 from app.ecommerce_pdd_parser import extract_competitors  # noqa: E402
 
 DEFAULT_DATA_DIR = ROOT / "data"
+
+# 内嵌 rawData 里记录真实搜索词, 如 "searchKey":"蓝牙耳机"
+_SEARCH_KEY_RE = re.compile(r'"searchKey"\s*:\s*"([^"]+)"')
+
+
+def _detect_keyword(html: str) -> str | None:
+    m = _SEARCH_KEY_RE.search(html)
+    return m.group(1) if m else None
 
 
 def _find_latest_raw(out_dir: Path) -> Path | None:
@@ -77,11 +86,11 @@ def _fmt_warnings(report) -> str:
     return "\n".join(f"- {w}" for w in report.warnings)
 
 
-def _render_markdown(report, keyword: str | None, source: str) -> str:
-    return f"""# 拼多多「蓝牙耳机」竞品调研报告
+def _render_markdown(report, keyword: str, source: str) -> str:
+    return f"""# 拼多多「{keyword}」竞品调研报告
 
 > 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
-> 关键词: {keyword or '蓝牙耳机'}  
+> 关键词: {keyword}  
 > 数据来源: {source}  
 
 ## 一句话结论
@@ -96,7 +105,10 @@ def _render_markdown(report, keyword: str | None, source: str) -> str:
 
 {_fmt_keywords(report)}
 
-## 销量 TOP 商品
+## 店铺/品牌累计销量 TOP 商品
+
+> 说明：列表页 ``salesTip`` 字段的「本店已拼 / 全店总售 / 品牌热销」是**店铺或品牌累计销量**，
+> 不是单品月销量。只能反映"这个店/品牌多热门"，不能精确到单个商品的月销量。
 
 {_fmt_top_products(report)}
 
@@ -109,6 +121,7 @@ def _render_markdown(report, keyword: str | None, source: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate a plain-language competitor report from a PDD scan")
     parser.add_argument("--input", type=Path, default=None, help="Path to a pdd_raw_*.html file")
+    parser.add_argument("--keyword", default=None, help="Search keyword label (auto-detected from HTML if omitted)")
     parser.add_argument("--sort", default="sales", choices=["sales", "price", "balanced", "rating", "newest"])
     parser.add_argument("--top-n", type=int, default=20)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_DATA_DIR)
@@ -123,6 +136,8 @@ def main() -> int:
         )
 
     html = raw_path.read_text(encoding="utf-8", errors="replace")
+    keyword = args.keyword or _detect_keyword(html) or "蓝牙耳机"
+
     competitors = extract_competitors(html)
     if not competitors:
         raise SystemExit("没能从 HTML 解析出任何商品（可能没抓到 window.rawData）。")
@@ -130,13 +145,13 @@ def main() -> int:
     pref = AnalysisPreference(sort_by=args.sort, top_n=args.top_n)
     report = analyze(competitors, pref)
 
-    print("=== 拼多多竞品调研报告 ===\n")
+    print(f"=== 拼多多「{keyword}」竞品调研报告 ===\n")
     print("【一句话结论】", report.summary, "\n")
     print("【价格分布】")
     print(_fmt_price_dist(report.price_dist), "\n")
     print("【高频卖点】")
     print(_fmt_keywords(report), "\n")
-    print("【销量 TOP 商品】")
+    print("【店铺/品牌累计销量 TOP 商品】(注: 是店铺/品牌累计, 非单品月销量)")
     print(_fmt_top_products(report), "\n")
     print("【数据说明】")
     print(_fmt_warnings(report))
@@ -145,7 +160,7 @@ def main() -> int:
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     md_path = out_dir / f"ecommerce_competitor_report_{ts}.md"
     md_path.write_text(
-        _render_markdown(report, keyword=None, source=str(raw_path)),
+        _render_markdown(report, keyword=keyword, source=str(raw_path)),
         encoding="utf-8",
     )
     print(f"\n[report] markdown written -> {md_path}")
