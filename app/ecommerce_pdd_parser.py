@@ -18,8 +18,9 @@
 -------------------
 * 有的 -- ``goodsID``(商品ID) / ``goodsName``(标题) / ``priceInfo``(券后显示价) /
   ``salesTip``(销量文案) / ``tagList``(促销标签) / ``linkURL``(商品链接)
-* 没有的 -- **店铺名 / 评分 / 评论数 / 上架天数** (这些要进详情页, 且详情页要登录)
-  因此 ``shop_name`` 等字段保留 ``None``, 报告会给出对应 warning.
+* 列表页没有的 -- **店铺名 / 评分 / 评论数 / 上架天数**。但**详情页免登录能读**
+  (实测 ``goods.html?goods_id=...`` 免登录, 店铺名/评论数/单品销量在渲染后的正文里),
+  用 :func:`extract_goods_detail` 从详情页正文提取。列表页 ``shop_name`` 等字段保留 ``None``.
 * ``supply`` -- ``price`` 是原价(分), ``priceInfo`` 是券后显示价, **取 ``priceInfo``**.
 * **salesTip 语义** -- 「本店已拼 / 全店总售 / 品牌热销」是**店铺或品牌累计销量**,
   「N人想拼」是想拼人数, **都不是单品月销量**. 本模块把它解析成整数放进
@@ -39,6 +40,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from app.ecommerce_analyzer import Competitor
@@ -282,10 +284,78 @@ def extract_competitors(html: str) -> list[Competitor]:
     return [goods_to_competitor(g) for g in _iter_goods_objects(raw)]
 
 
+# ---------------------------------------------------------------------------
+# 详情页字段提取 (goods.html, 免登录, 从渲染后正文提取)
+# ---------------------------------------------------------------------------
+
+# 详情页单品销量文案: "热销9.4万+件" / "已抢11.3万+件" / "总售5.3万+件" / "热销128件"
+# (都是单品累计销量, 区别于列表页"本店已拼900万+件"的店铺累计——只匹配这三个前缀)
+_DETAIL_SALES_RE = re.compile(r"(?:热销|已抢|总售)\s*([\d.]+万?\+?)\s*件")
+
+# 评论数: "商品评价(14,870)"
+_DETAIL_COMMENT_RE = re.compile(r"商品评价\s*\(\s*([\d,]+)\s*\)")
+
+# 店铺名在"进店逛逛"上方, 跳过这些含销量/评价/标签关键词的行
+_SHOP_SKIP_KW = (
+    "本店", "全店", "已拼", "热销", "粉丝", "种草", "评价",
+    "正品", "音质", "外观", "质量", "续航", "耳机", "清晰", "低音",
+    "功能", "戴起来", "杂音", "浑厚",
+)
+
+
+@dataclass(frozen=True)
+class GoodsDetail:
+    """详情页能拿到的补充字段 (列表页没有)."""
+
+    shop_name: Optional[str]   # 店铺名
+    single_sales: Optional[int]   # 单品销量 (热销N件)
+    comment_count: Optional[int]  # 评论数 (商品评价(N))
+
+
+def _extract_shop_name(text: str) -> Optional[str]:
+    """从详情页正文提取店铺名 ("进店逛逛"上方第一行非销量/标签文本)."""
+    idx = text.find("进店逛逛")
+    if idx < 0:
+        return None
+    for line in reversed(text[:idx].split("\n")):
+        line = line.strip()
+        if not line:
+            continue
+        if any(k in line for k in _SHOP_SKIP_KW):
+            continue
+        return line
+    return None
+
+
+def extract_goods_detail(text: str) -> GoodsDetail:
+    """详情页可见正文 -> :class:`GoodsDetail` (店铺名/单品销量/评论数).
+
+    拿不到评分 (星级数字详情页不展示), 评论数作为热度替代.
+    字段抓不到就 ``None``, 不抛错.
+    """
+    single_sales: Optional[int] = None
+    m = _DETAIL_SALES_RE.search(text)
+    if m:
+        single_sales = parse_sales_tip(m.group(1))
+
+    comment_count: Optional[int] = None
+    m = _DETAIL_COMMENT_RE.search(text)
+    if m:
+        comment_count = int(m.group(1).replace(",", ""))
+
+    return GoodsDetail(
+        shop_name=_extract_shop_name(text),
+        single_sales=single_sales,
+        comment_count=comment_count,
+    )
+
+
 __all__ = [
     "extract_raw_data",
     "parse_sales_tip",
     "extract_feature_tags",
     "goods_to_competitor",
     "extract_competitors",
+    "GoodsDetail",
+    "extract_goods_detail",
 ]
