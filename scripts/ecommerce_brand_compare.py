@@ -62,7 +62,11 @@ def _fmt_price_cell(price) -> str:
 
 
 def _brand_row(brand: str, rep, n_parsed: int) -> dict:
-    """把单个品牌的 AnalysisReport 压成一行的对比数据."""
+    """把单个品牌的 AnalysisReport 压成一行的对比数据.
+
+    同时返回 ``kw1/kw2/kw3`` (兼容 markdown 报告) 和
+    ``top_keywords`` (list[dict], 给 insight 层做卖点空缺分析).
+    """
     pd = rep.price_dist
     kw = rep.top_keywords[:3]
     top = rep.top_competitors[0] if rep.top_competitors else None
@@ -85,6 +89,12 @@ def _brand_row(brand: str, rep, n_parsed: int) -> dict:
         "top_model": (top.title[:24] + "…") if top and len(top.title) > 24 else (top.title if top else "—"),
         "top_price": top.price_cny if top else None,
         "top_sales": top.monthly_sales if top else None,
+        # 给 insight 层消费的完整字段 (list[dict] 带 count/pct)
+        "top_keywords": [
+            {"keyword": k.keyword, "count": k.count, "pct": k.pct} for k in kw
+        ],
+        # 给 insight 层消费的数据质量警告
+        "warnings": list(rep.warnings),
     }
 
 
