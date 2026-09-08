@@ -26,4 +26,6 @@ jobs:
       # 不需要真实 Chrome / CDP / API key, 在 ubuntu runner 上可直接跑。
       # test_ctrip_* / test_pdd_cdp_* 需要桌面 CDP 通道, 不进 CI。
       - name: Run ecommerce tests
-        run: pytest -q tests/test_ecommerce_*.py
+        # 用 `python -m pytest` 而非裸 pytest: -m 会把 repo root 加进 sys.path,
+        # tests/conftest.py 里的 `import app` 依赖这一点 (与本地跑法一致)。
+        run: python -m pytest -q tests/test_ecommerce_*.py
