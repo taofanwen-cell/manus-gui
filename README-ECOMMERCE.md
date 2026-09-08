@@ -1,6 +1,6 @@
 # 拼多多竞品调研 API
 
-[![CI](https://github.com/ckenkuo/manus-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/ckenkuo/manus-gui/actions/workflows/ci.yml)
+[![CI](https://github.com/taofanwen-cell/manus-gui/actions/workflows/ci.yml/badge.svg)](https://github.com/taofanwen-cell/manus-gui/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
