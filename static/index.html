@@ -191,11 +191,11 @@
           <div class="chart" id="chart-price"></div>
         </div>
         <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> 各品牌单品销量 (件)</div>
+          <div class="h5"><span class="dot"></span> <span id="title-sales">各品牌销量</span></div>
           <div class="chart" id="chart-sales"></div>
         </div>
         <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> 销量占比</div>
+          <div class="h5"><span class="dot"></span> <span id="title-donut">销量占比</span></div>
           <div class="chart" id="chart-donut"></div>
         </div>
       </div>
@@ -338,9 +338,24 @@ function fmtWan(n) {
   return String(n);
 }
 
+// ── 销量口径 ────────────────────────────────────────────────────────────
+// top_sales 有两种完全不同的语义, 由后端 top_sales_source 标识:
+//   'single'     → 详情页单品销量 (可跨品牌比)
+//   'shop_total' → 列表页店铺/品牌累计 (不可当单品比)
+// 前端绝不能脱离口径直接显示成一个"单品销量"标签 —— 那会把 4000万累计说成单品卖了4000万。
+const SALES_LABEL = { single: '单品销量', shop_total: '店铺/品牌累计销量', unknown: '销量' };
+const salesLabel = (src) => SALES_LABEL[src] || SALES_LABEL.unknown;
+
+// 混口径检测: 有的品牌有单品销量、有的只有累计数 → 放同一张图比是误导, 必须提示
+function salesSourceStats(rows) {
+  const sources = new Set(rows.filter(r => r.top_sales != null).map(r => r.top_sales_source || 'unknown'));
+  return { mixed: sources.size > 1, sources: [...sources], dominant: [...sources][0] || 'unknown' };
+}
+
 function renderAll(data) {
   const rows = data.rows || [];
   const brands = rows.map(r => r.brand);
+  const sStat = salesSourceStats(rows);
 
   // KPI
   const totalSample = rows.reduce((s, r) => s + (r.sample_size || 0), 0);
@@ -354,8 +369,21 @@ function renderAll(data) {
     { k: '对比品牌数', v: rows.length, trend: '' },
     { k: '商品样本总数', v: totalSample.toLocaleString(), trend: '' },
     { k: '均价中位数(¥)', v: medianAvg ?? '—', trend: '' },
-    { k: '累计单品销量', v: fmtWan(totalSales), trend: `价格最低: ${lowBrand ? lowBrand.brand : '—'}` },
+    {
+      k: `销量合计 (${sStat.mixed ? '口径混用' : salesLabel(sStat.dominant)})`,
+      v: fmtWan(totalSales),
+      trend: sStat.mixed ? '⚠ 口径不一致, 不可直接比' : `价格最低: ${lowBrand ? lowBrand.brand : '—'}`,
+    },
   ].map(x => `<div class="kpi"><div class="v">${x.v}</div><div class="k">${x.k}</div><div class="trend">${x.trend}</div></div>`).join('');
+
+  // 图表标题随口径变 + 混口径时挂警告条
+  const salesTitle = sStat.mixed
+    ? '各品牌销量 (⚠ 口径混用: 单品销量 vs 店铺累计, 不可直接比)'
+    : `各品牌${salesLabel(sStat.dominant)} (件)`;
+  const ts = document.getElementById('title-sales');
+  const td = document.getElementById('title-donut');
+  if (ts) ts.textContent = salesTitle;
+  if (td) td.textContent = sStat.mixed ? '销量占比 (⚠ 口径混用)' : `${salesLabel(sStat.dominant)}占比`;
 
   // 图表
   renderPriceChart(brands, rows);
@@ -396,7 +424,17 @@ function renderSalesChart(brands, rows) {
   chart.setOption({
     backgroundColor: 'transparent',
     grid: { left: 56, right: 20, top: 22, bottom: 30 },
-    tooltip: { trigger: 'axis' },
+    // tooltip 里带口径, hover 时能看到这数字到底是单品还是店铺累计
+    tooltip: {
+      trigger: 'axis',
+      formatter: (ps) => {
+        const i = ps[0].dataIndex;
+        const r = rows[i] || {};
+        const src = r.top_sales_source || 'unknown';
+        const warn = src === 'shop_total' ? '<br/><span style="color:#ffb020">⚠ 店铺/品牌累计, 非单品销量</span>' : '';
+        return `${r.brand || brands[i]}<br/>${salesLabel(src)}: <b>${fmtWan(r.top_sales || 0)}</b>${warn}`;
+      },
+    },
     xAxis: { type: 'category', data: brands, axisLine: { lineStyle: { color: '#2a4a6a' } }, axisLabel: { color: '#cfe3f5', interval: 0, fontSize: 12 } },
     yAxis: { type: 'value', axisLabel: { color: '#7f9cc0', formatter: v => fmtWan(v) }, splitLine: { lineStyle: { color: 'rgba(120,150,180,.15)' } } },
     series: [{
@@ -530,7 +568,10 @@ function renderWordcloud(brands, rows) {
 
 /* 表格 */
 function renderTable(brands, rows) {
-  const head = ['品牌', '中位价', '价格区间', '价格分档(低/中/高/顶)', '高频卖点', '销量冠军', '单品销量'];
+  const sStat = salesSourceStats(rows);
+  // 销量列头随口径变; 混口径时写"销量(口径见各行)", 避免表头一句"单品销量"盖住两种语义
+  const sHead = sStat.mixed ? '销量 (口径见各行)' : salesLabel(sStat.dominant);
+  const head = ['品牌', '中位价', '价格区间', '价格分档(低/中/高/顶)', '高频卖点', '销量冠军', sHead, '店铺名', '评论数'];
   $('table-head').innerHTML = head.map(h => `<th>${h}</th>`).join('');
   const low = ['¥100以内', '¥100-300', '¥300-800', '¥800+'];
   $('table-body').innerHTML = rows.map(r => {
@@ -547,7 +588,11 @@ function renderTable(brands, rows) {
       <td>¥${r.median ?? '—'}</td><td>¥${r.min ?? '—'} ~ ¥${r.max ?? '—'}</td>
       <td>${bars}</td><td>${kws || '—'}</td>
       <td>${(r.top_product || '—').slice(0, 16)}${(r.top_product||'').length > 16 ? '…' : ''}</td>
-      <td>${fmtWan(r.top_sales)}</td></tr>`;
+      <td>${fmtWan(r.top_sales)}${r.top_sales_source === 'shop_total'
+        ? ' <span style="color:#ffb020;font-size:11px;" title="列表页 salesTip, 是店铺/品牌历史累计数, 非该单品销量">⚠累计</span>'
+        : ''}</td>
+      <td>${r.shop_name || '—'}</td>
+      <td>${r.comment_count != null ? r.comment_count.toLocaleString() : '—'}</td></tr>`;
   }).join('');
 }
 

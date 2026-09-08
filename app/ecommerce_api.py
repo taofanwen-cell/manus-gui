@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ecommerce_analyzer import AnalysisPreference, analyze
+from app.ecommerce_detail_store import load_latest_detail
 from app.ecommerce_insight import (
     Insight,
     LLMInsightGenerator,
@@ -167,7 +168,16 @@ class CompetitorBrandRow(BaseModel):
     filtered_size: int
     top_keywords: list[dict]
     top_product: str | None = None
+    #: 销量数字 —— 语义由 :attr:`top_sales_source` 决定, **不要脱离来源单独解读**
     top_sales: int | None = None
+    #: ``"single"`` 详情页单品销量 (可跨品牌比) / ``"shop_total"`` 列表页店铺或品牌
+    #: 累计销量 (不可当单品比) / ``"unknown"`` 都没有
+    top_sales_source: str = "unknown"
+    #: 参考: 店铺/品牌累计销量 (列表页 salesTip), 与 top_sales 是不同指标
+    shop_sales: int | None = None
+    #: 详情页补充 (列表页没有)
+    shop_name: str | None = None
+    comment_count: int | None = None
 
 
 class CompetitorReportResponse(BaseModel):
@@ -208,6 +218,10 @@ def _to_brand_row_dict(row: dict) -> CompetitorBrandRow:
         top_keywords=top_keywords,
         top_product=row.get("top_model"),
         top_sales=row.get("top_sales"),
+        top_sales_source=row.get("top_sales_source", "unknown"),
+        shop_sales=row.get("shop_sales"),
+        shop_name=row.get("shop_name"),
+        comment_count=row.get("comment_count"),
     )
 
 
@@ -221,15 +235,21 @@ def build_report(
     html_source: HTMLSource,
     insight_gen: LLMInsightGenerator | None = None,
     pref: AnalysisPreference | None = None,
+    detail_dir: Path | None = None,
 ) -> CompetitorReportResponse:
     """端点核心业务函数 — 便于测试直接调, 不必经过 HTTP.
 
     流程
     ----
     1. 拿每个品牌的 HTML (走 html_source, 默认离线读 data/)
-    2. 解析 → analyze() → 一行 dict
+    2. 解析 → analyze() → 一行 dict (详情字段从 detail_dir 注入, 见下)
     3. (可选) 跑 insight_gen.generate(rows) → list[Insight]
     4. 返回结构化响应
+
+    ``detail_dir``
+        详情页字段目录 (``data/pdd_detail_*.json`` 所在处)。给了就优先用**单品销量**,
+        不给或没采集过则降级到列表页店铺/品牌累计, 并在 ``top_sales_source`` 标出。
+        默认 ``None`` = 不加载 (纯列表页口径), 测试可用 tmp_path 注入。
 
     关键设计: **端点业务逻辑可在 sandbox 跑**, 因为默认 html_source 是离线读,
     不发起网络请求.
@@ -240,6 +260,14 @@ def build_report(
     rows: list[dict] = []
     row_models: list[CompetitorBrandRow] = []
     global_warnings: list[str] = []
+
+    # 详情页增强数据: 单品销量 / 店铺名 / 评论数。缺了不报错 —— 走降级并且在
+    # top_sales_source 里标 "shop_total", 让前端/insight 知道这数字不能当单品比。
+    details: dict = load_latest_detail(detail_dir) if detail_dir is not None else {}
+    if detail_dir is not None and not details:
+        global_warnings.append(
+            "未找到 data/pdd_detail_*.json (详情页单品销量), 销量降级为列表页店铺/品牌累计, 不可当单品比"
+        )
 
     # 复用 _brand_row (从 ecommerce_brand_compare 引用, 避免重复实现)
     from scripts.ecommerce_brand_compare import _brand_row  # type: ignore
@@ -261,7 +289,7 @@ def build_report(
             continue
 
         report = analyze(competitors, pref)
-        row = _brand_row(brand, report, len(competitors))
+        row = _brand_row(brand, report, len(competitors), detail=details.get(brand))
         rows.append(row)
         row_models.append(_to_brand_row_dict(row))
 
@@ -290,13 +318,20 @@ def create_app(
     *,
     html_source: HTMLSource | None = None,
     insight_gen: LLMInsightGenerator | None = None,
+    detail_dir: Path | None = None,
 ) -> FastAPI:
-    """FastAPI 工厂. ``html_source`` / ``insight_gen`` 都可注入, 便于测试."""
+    """FastAPI 工厂. ``html_source`` / ``insight_gen`` 都可注入, 便于测试.
+
+    ``detail_dir``: 详情页字段目录, 给了就让销量优先用**单品销量**。
+    默认从 ``FileHTMLSource.data_dir`` 推断 (即 ``data/``)。
+    """
     if html_source is None:
         # data/ 相对项目根; FastAPI 启动时 cwd 就是项目根
         html_source = FileHTMLSource(Path("data"))
     if insight_gen is None:
         insight_gen = StubInsightGenerator()
+    if detail_dir is None and isinstance(html_source, FileHTMLSource):
+        detail_dir = html_source.data_dir
 
     app = FastAPI(
         title="拼多多竞品调研 API",
@@ -327,6 +362,7 @@ def create_app(
     # 用闭包捕获注入的依赖
     _html = html_source
     _gen = insight_gen
+    _detail_dir = detail_dir
 
     @app.get("/api/health")
     def health() -> dict:
@@ -339,7 +375,9 @@ def create_app(
     @app.post("/api/competitor-report", response_model=CompetitorReportResponse)
     def competitor_report(req: CompetitorReportRequest) -> CompetitorReportResponse:
         try:
-            return build_report(req, html_source=_html, insight_gen=_gen)
+            return build_report(
+                req, html_source=_html, insight_gen=_gen, detail_dir=_detail_dir
+            )
         except HTTPException:
             raise
         except Exception as e:  # noqa: BLE001

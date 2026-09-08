@@ -32,6 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.ecommerce_analyzer import AnalysisPreference, analyze  # noqa: E402
+from app.ecommerce_detail_store import load_latest_detail  # noqa: E402
 from app.ecommerce_pdd_parser import extract_competitors  # noqa: E402
 from app.ecommerce_url_query import SearchParams, build_search_url  # noqa: E402
 
@@ -61,16 +62,63 @@ def _fmt_price_cell(price) -> str:
     return "—" if price is None else f"¥{price}"
 
 
-def _brand_row(brand: str, rep, n_parsed: int) -> dict:
+#: top_sales 的取值来源 —— 决定下游 (API/前端/insight) 怎么标这个数字
+SALES_SRC_SINGLE = "single"        # 详情页单品销量 (真实, 可跨品牌比)
+SALES_SRC_SHOP_TOTAL = "shop_total"  # 列表页 salesTip 店铺/品牌累计 (不可当单品比)
+SALES_SRC_UNKNOWN = "unknown"
+
+
+def _resolve_sales(top, detail: dict | None) -> tuple[int | None, str, int | None]:
+    """决定 ``top_sales`` 取哪个值, 并说明来源.
+
+    销量语义是这个项目最容易搞错的地方 (见 README「关键设计决策」):
+
+    - 列表页 ``salesTip`` = **店铺/品牌累计** ("品牌热销4026.3万+件"), 品牌越大数字越虚,
+      跨品牌比"谁单品卖得好"是错的。
+    - 详情页正文 "热销/已抢/总售 N 件" = **单品销量**, 才是能比的那个。
+
+    所以优先级: **详情页单品销量 > 列表页累计**, 且**必须把来源一起返回**,
+    让下游按来源标标签 —— 不能只给一个数字让调用方自己猜语义。
+
+    返回 ``(top_sales, source, shop_sales)``:
+      - ``top_sales``   最终展示的销量 (None = 都没有)
+      - ``source``      :data:`SALES_SRC_SINGLE` / :data:`SALES_SRC_SHOP_TOTAL` / :data:`SALES_SRC_UNKNOWN`
+      - ``shop_sales``  店铺/品牌累计销量 (参考列, 可能 None)
+    """
+    list_sales = top.monthly_sales if top is not None else None
+
+    single = None
+    if detail:
+        v = detail.get("single_sales")
+        if isinstance(v, int):  # 详情页可能没匹配到销量文案 → None
+            single = v
+
+    if single is not None:
+        return single, SALES_SRC_SINGLE, (detail or {}).get("list_sales") or list_sales
+    if list_sales is not None:
+        return list_sales, SALES_SRC_SHOP_TOTAL, list_sales
+    return None, SALES_SRC_UNKNOWN, None
+
+
+def _brand_row(brand: str, rep, n_parsed: int, *, detail: dict | None = None) -> dict:
     """把单个品牌的 AnalysisReport 压成一行的对比数据.
 
     同时返回 ``kw1/kw2/kw3`` (兼容 markdown 报告) 和
-    ``top_keywords`` (list[dict], 给 insight 层做卖点空缺分析).
+    ``top_keywords`` (list[dict], 给 insight 层做卖点空缺分析)。
+
+    ``detail`` 是 ``data/pdd_detail_*.json`` 里该品牌的详情字段 (可选)。给了就让
+    **单品销量优先** 于列表页店铺累计销量, 并补上店铺名/评论数 —— 没有就降级,
+    但会在 ``top_sales_source`` 里标清楚, 不放任下游误读。
     """
     pd = rep.price_dist
     # 词云要用所有特征词的频次聚合, 取 top10 给前端合并去重; markdown 报告仍只显示 TOP3
     kw = rep.top_keywords[:10]
     top = rep.top_competitors[0] if rep.top_competitors else None
+    top_sales, sales_source, shop_sales = _resolve_sales(top, detail)
+    # 详情页采集的机型名跟列表页是同一个 top1, 用详情页的更完整 (未截断)
+    top_model = (detail or {}).get("top_model") if detail else None
+    if not top_model and top is not None:
+        top_model = top.title[:24] + "…" if len(top.title) > 24 else top.title
     return {
         "brand": brand,
         "parsed": n_parsed,
@@ -87,9 +135,18 @@ def _brand_row(brand: str, rep, n_parsed: int) -> dict:
         "kw1": kw[0].keyword if len(kw) > 0 else "—",
         "kw2": kw[1].keyword if len(kw) > 1 else "—",
         "kw3": kw[2].keyword if len(kw) > 2 else "—",
-        "top_model": (top.title[:24] + "…") if top and len(top.title) > 24 else (top.title if top else "—"),
+        "top_model": top_model or "—",
+        # 别名: insight 层/前端按 `top_product` 读, 以前只有 `top_model` → 机型名一直是 "—"
+        "top_product": top_model or "—",
         "top_price": top.price_cny if top else None,
-        "top_sales": top.monthly_sales if top else None,
+        "top_sales": top_sales,
+        # 语义标记: 下游按这个决定标签 (单品销量 / 店铺累计), 不要只看数字
+        "top_sales_source": sales_source,
+        # 参考列: 店铺/品牌累计销量 (列表页 salesTip), 明确不可当单品比
+        "shop_sales": shop_sales,
+        # 详情页补充字段 (列表页没有)
+        "shop_name": (detail or {}).get("shop_name"),
+        "comment_count": (detail or {}).get("comment_count"),
         # 给 insight 层消费的完整字段 (list[dict] 带 count/pct)
         "top_keywords": [
             {"keyword": k.keyword, "count": k.count, "pct": k.pct} for k in kw
@@ -114,10 +171,25 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
 
     def hot_row(r):
         sales = r["top_sales"]
-        sales_txt = f"{sales/10000:g}万" if sales and sales >= 10000 else (str(sales) if sales else "—")
+        if not sales:
+            sales_txt = "—"
+        elif sales >= 10000:
+            sales_txt = f"{sales/10000:g}万"
+        else:
+            sales_txt = str(sales)
+        # 语义标记: 单品销量可跨品牌比, 店铺/品牌累计不行 —— 表格里直接写清楚
+        src = r.get("top_sales_source")
+        if not sales:
+            src_txt = "—"
+        elif src == SALES_SRC_SINGLE:
+            src_txt = "单品销量"
+        elif src == SALES_SRC_SHOP_TOTAL:
+            src_txt = "⚠ 店铺/品牌累计"
+        else:
+            src_txt = "未知"
         return (
             f"| {r['brand']} | {r['top_model']} | "
-            f"¥{r['top_price'] if r['top_price'] is not None else '—'} | {sales_txt} |"
+            f"¥{r['top_price'] if r['top_price'] is not None else '—'} | {sales_txt} | {src_txt} |"
         )
 
     price_lines = "\n".join(price_row(r) for r in rows)
@@ -165,14 +237,18 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
 
 ## 四、热度机型对比
 
-| 品牌 | 热度 TOP 机型 | 价格 | 累计销量(店/牌) |
-|---|---|---|---|
+| 品牌 | 热度 TOP 机型 | 价格 | 销量 | 销量口径 |
+|---|---|---|---|---|
 {hot_lines}
+
+> **销量口径说明**: 「单品销量」来自商品详情页正文 ("热销/已抢/总售 N 件"), 可跨品牌比;
+> 「⚠ 店铺/品牌累计」来自列表页 `salesTip` ("品牌热销 N 件"), 是该店铺/品牌的历史累计数,
+> **不能当作单品销量跨品牌比较**。详情页没采到时才降级用后者。
 
 ## 五、结论要点
 
-- 以上销量字段为拼多多列表页 `salesTip` 的**店铺/品牌累计销量，非单品月销量**，仅作热度参考，不能跨品牌直接比谁单品卖得好。
-- 评分 / 评论数 / 店铺名不在搜索列表页，需进详情页（本报告不含）。
+- 销量优先取**详情页单品销量**（可跨品牌比），采不到才降级到列表页 `salesTip` 的**店铺/品牌累计**（不可比），并在上表「销量口径」列标出。
+- 店铺名 / 评论数仅详情页有；未跑 `scripts/pdd_detail_enrich.py` 的品牌这两列为空。
 - 定位结论：{with_median[0]['brand'] if with_median else '—'} 切入最低价位（中位数 ¥{with_median[0]['median']}），{with_median[-1]['brand'] if with_median else '—'} 价位最高（中位数 ¥{with_median[-1]['median']}）。
 """
 
@@ -199,6 +275,14 @@ def main() -> int:
     rows: list[dict] = []
     scanned: list[str] = []
     failed: list[str] = []
+
+    # 详情页增强数据 (单品销量/店铺名/评论数) —— 没跑过 pdd_detail_enrich.py 就是空 dict,
+    # 走降级路径 (用列表页累计销量), 但会在 top_sales_source 里标 "shop_total"。
+    details = load_latest_detail(out_dir)
+    if details:
+        print(f"[detail] 已加载 {len(details)} 个品牌的详情页字段 → 销量口径优先用单品销量")
+    else:
+        print("[detail] 无 pdd_detail_*.json → 销量降级为列表页店铺/品牌累计 (口径会标 ⚠)")
 
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(cdp_url)
@@ -230,13 +314,15 @@ def main() -> int:
                 continue
 
             rep = analyze(competitors, pref)
-            row = _brand_row(brand, rep, len(competitors))
+            row = _brand_row(brand, rep, len(competitors), detail=details.get(brand))
             rows.append(row)
             scanned.append(brand)
             pd = rep.price_dist
+            src = row["top_sales_source"]
             print(
                 f"[scan] {brand}: 样本 {len(competitors)} | 中位数 ¥{pd.median if pd else '—'} | "
-                f"区间 ¥{pd.min if pd else '—'}~¥{pd.max if pd else '—'}"
+                f"区间 ¥{pd.min if pd else '—'}~¥{pd.max if pd else '—'} | "
+                f"销量={row['top_sales']} ({src})"
             )
 
             if brand is not args.brands[-1]:

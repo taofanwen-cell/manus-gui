@@ -182,26 +182,71 @@ def _insight_price_tiers(rows: list[dict]) -> list[Insight]:
 
 
 def _insight_hot_top(rows: list[dict]) -> Insight | None:
-    """单品销量最高的品牌+机型 (基于 top_sales, 通常来自己读详情页)."""
-    best: tuple[str, int | None, str | None] | None = None
-    for r in rows:
-        s = r.get("top_sales")
-        if s is None:
-            continue
-        if best is None or s > best[1]:
-            best = (r["brand"], s, r.get("top_product"))
+    """销量最高的品牌+机型 — **文案随 ``top_sales_source`` 变**.
+
+    ``top_sales`` 可能是两种完全不同的东西 (见 README「关键设计决策」):
+
+    - ``single``: 详情页单品销量 → 可以说"单品销量最高", 能跨品牌比。
+    - ``shop_total``: 列表页店铺/品牌累计 → 只能说"累计热度最高", 且**必须显式标注
+      这不是单品销量**, 否则读者会误以为该单品真卖了 4000 万件。
+
+    混在一起比也会出错 (一个品牌用单品 5 万, 另一个用累计 4000 万, 直接 max 没意义),
+    所以**只在同一种口径内选冠军**。
+    """
+    # 先按口径分组: 优先在"单品销量"里选冠军, 没有才退回"店铺累计"
+    def _pick(source: str):
+        best = None
+        for r in rows:
+            if r.get("top_sales_source", "unknown") != source:
+                continue
+            s = r.get("top_sales")
+            if s is None:
+                continue
+            if best is None or s > best[1]:
+                best = (r["brand"], s, r.get("top_product"))
+        return best
+
+    is_single = True
+    best = _pick("single")
     if best is None:
-        return None
+        is_single = False
+        best = _pick("shop_total")
+    if best is None:
+        # 都没标 source (老数据/单测只给了 top_sales) → 按数字选, 但不下"单品"结论
+        for r in rows:
+            s = r.get("top_sales")
+            if s is None:
+                continue
+            if best is None or s > best[1]:
+                best = (r["brand"], s, r.get("top_product"))
+        if best is None:
+            return None
+        is_single = False
     brand, sales, product = best
+
+    if is_single:
+        body = (
+            f"【热度冠军】 单品销量最高: {brand} 的 {product or '—'}, "
+            f"卖出 {_fmt_top_sales(sales)}"
+        )
+        return Insight(
+            "hot",
+            body,
+            (("品牌", brand), ("单品销量", _fmt_top_sales(sales)),
+             ("热度机型", product or "—")),
+        )
+
+    # 降级口径: 措辞和证据表都必须写清"累计", 不能让读者当单品读
     body = (
-        f"【热度冠军】 单品销量最高: {brand} 的 {product or '—'}, "
-        f"卖出 {_fmt_top_sales(sales)}"
+        f"【热度冠军】 店铺/品牌累计销量最高: {brand} 的 {product or '—'}, "
+        f"累计 {_fmt_top_sales(sales)}（⚠ 这是店铺/品牌累计数, 非该单品销量, "
+        f"不能跨品牌比单品表现；跑 scripts/pdd_detail_enrich.py 可补真实单品销量）"
     )
     return Insight(
         "hot",
         body,
-        (("品牌", brand), ("单品销量", _fmt_top_sales(sales)),
-         ("热度机型", product or "—")),
+        (("品牌", brand), ("店铺/品牌累计", _fmt_top_sales(sales)),
+         ("热度机型", product or "—"), ("口径", "店铺/品牌累计, 非单品销量")),
     )
 
 
@@ -347,11 +392,17 @@ def _build_prompt(rows: list[dict]) -> str:
     parts = ["以下是各品牌的竞品分析摘要, 请用 3-5 句中文给出关键业务洞察:\n"]
     for r in rows:
         kw = "、".join(f"{k['keyword']}({k['count']})" for k in (r.get("top_keywords") or [])[:3])
+        # 口径必须一起喂给 LLM —— 只给数字它会把"店铺累计4000万"当单品销量写进结论
+        src = r.get("top_sales_source", "unknown")
+        label = {
+            "single": "单品销量",
+            "shop_total": "店铺/品牌累计(非单品销量)",
+        }.get(src, "销量(口径未知)")
         parts.append(
             f"- {r['brand']}: 中位数 {_fmt_price(r.get('median'))}, "
             f"区间 {_fmt_price(r.get('min'))} ~ {_fmt_price(r.get('max'))}, "
             f"高频卖点 [{kw}], 热度机型 {r.get('top_product', '—')} "
-            f"({_fmt_top_sales(r.get('top_sales'))})"
+            f"({label} {_fmt_top_sales(r.get('top_sales'))})"
         )
     parts.append("\n请用简洁 bullet 输出, 不要解释, 不要客套。")
     return "\n".join(parts)
