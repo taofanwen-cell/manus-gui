@@ -20,7 +20,7 @@
 #   taskkill /PID <PID> /F                     # Windows (指定 PID, 安全)
 #
 # 设计原则:
-#   - 启动器模式 (不是常驻 wait): 启动 uvicofn 后立即 exit, 跨平台稳定
+#   - 启动器模式 (不是常驻 wait): 启动 uvicorn 后立即 exit, 跨平台稳定
 #   - 自动检测 .venv (Mac/Linux 用 bin/python, Win 用 Scripts/python.exe)
 #   - 健康检查用 python urllib, 绕开 Git Bash 下 curl 写文件失败 (exit 23) 的已知 bug
 #   - 打开浏览器用 OSTYPE 匹配 (darwin/linux/msys), 都后台化不阻塞
@@ -146,22 +146,22 @@ echo
 # ---------------------------------------------------------------------------
 # Git Bash on Windows 上 Ctrl+C 信号在 nohup 后台进程组里传递不可靠,
 # trap handler 不一定触发。改成启动器模式:
-#   - demo.sh 启动 uvicofn 后立即 exit 0, 不在 bash 里 wait
-#   - uvicofn 在 disown 后的独立进程组跑, 不依赖 demo.sh
-#   - 用户用 pkill / taskkill 关闭 uvicofn
+#   - demo.sh 启动 uvicorn 后立即 exit 0, 不在 bash 里 wait
+#   - uvicorn 在 disown 后的独立进程组跑, 不依赖 demo.sh
+#   - 用户用 pkill / taskkill 关闭 uvicorn
 # 这样 demo 脚本既轻量又跨平台 (Win/Mac/Linux) 都稳定。
 # ---------------------------------------------------------------------------
 echo "============================================================"
 echo " ✓ demo 已启动"
 echo "   Web UI:    $URL"
 echo "   Swagger:   ${URL}docs"
-echo "   uvicofn PID: $UVICORN_PID"
+echo "   uvicorn PID: $UVICORN_PID"
 echo "   日志:      tail -f /tmp/ecommerce_demo_uvicorn.log"
 echo "   停止服务:  pkill -f 'uvicorn app.ecommerce_api'"
 echo "             (或 Windows: taskkill /F /FI \"WINDOWTITLE eq uvicorn*\")"
 echo "============================================================"
 
-# disown: 把 uvicofn 从本 shell 的 job table 摘除, demo.sh exit 后不会因 SIGHUP 杀它
+# disown: 把 uvicorn 从本 shell 的 job table 摘除, demo.sh exit 后不会因 SIGHUP 杀它
 disown "$UVICORN_PID" 2>/dev/null || true
 
 exit 0
