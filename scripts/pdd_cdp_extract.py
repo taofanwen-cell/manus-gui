@@ -174,7 +174,8 @@ def main() -> int:
         scan_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[scan] summary -> {scan_path}")
 
-        browser.close()
+        # 注意: 不要 browser.close() —— 这是 attach 到用户 Chrome 的 CDP 连接,
+        # close() 会把用户可见的 Chrome 一起关掉。连接随 sync_playwright 退出而断开。
 
     print(json.dumps(
         {
