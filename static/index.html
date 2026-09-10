@@ -292,10 +292,10 @@
         <div class="h5" style="font-size:14px;color:var(--cyan-dim);margin-bottom:12px;" data-page-node-id="hDUFEFkrOHHexCMFnM8fBj"><span class="dot" data-page-node-id="eL3Z2PcWTwcytqk3FlS3HU"></span> 品牌对比明细表</div>
         <table class="data" data-page-node-id="cFFnEuhwoalvP0mjyJZNaz">
           <colgroup data-page-node-id="LBDyaaBpPI0oMLOS0NJRCg">
-            <col style="width:8%" data-page-node-id="sSrnGqMDKXcfEPRRzZYJMU"><col style="width:7%" data-page-node-id="v9zmBXhr5cuFv5vh2iWe64"><col style="width:11%" data-page-node-id="LSjUIfs82oBjzBATEm92d8">
+            <col style="width:7%" data-page-node-id="sSrnGqMDKXcfEPRRzZYJMU"><col style="width:7%" data-page-node-id="v9zmBXhr5cuFv5vh2iWe64"><col style="width:11%" data-page-node-id="LSjUIfs82oBjzBATEm92d8">
             <col style="width:6%" data-page-node-id="YVqNGFSRJa370TPSGH8iFJ"><col style="width:6%" data-page-node-id="A6wniD1lw7TQ7ZwQUUkKpX"><col style="width:6%" data-page-node-id="l9BGwn29qJkbH1tEOtaPBG"><col style="width:6%" data-page-node-id="EdEZrK6Ul7hkA0fVViK7mC">
-            <col style="width:14%" data-page-node-id="e0i4Mj4bBV0XRdcaiwdNGu"><col style="width:13%" data-page-node-id="oEeCmSQ8I2BoVZy9KvDO47"><col style="width:9%" data-page-node-id="n8a89ADFTAafxdYn1rVC2c">
-            <col style="width:9%" data-page-node-id="3WX8w4IfoCgETEoBDfHtxW"><col style="width:5%" data-page-node-id="uQOhknD07ShqE52PFgC0YL">
+            <col style="width:13%" data-page-node-id="e0i4Mj4bBV0XRdcaiwdNGu"><col style="width:12%" data-page-node-id="oEeCmSQ8I2BoVZy9KvDO47"><col style="width:11%" data-page-node-id="n8a89ADFTAafxdYn1rVC2c">
+            <col style="width:9%" data-page-node-id="3WX8w4IfoCgETEoBDfHtxW"><col style="width:6%" data-page-node-id="uQOhknD07ShqE52PFgC0YL">
           </colgroup>
           <thead id="table-head" data-page-node-id="KinsySZl09BPqulNMJBNvI"></thead>
           <tbody id="table-body" data-page-node-id="OkajnJtDQ0ojPeaUQpoQcE"></tbody>
@@ -573,33 +573,43 @@ function renderAll(data) {
   const brands = rows.map(r => r.brand);
   const sStat = salesSourceStats(rows);
 
-  // KPI
+  // KPI —— 销量合计只能加同口径的数; 混口径时只合计"可比组"(单品销量), 店铺累计不入和
   const totalSample = rows.reduce((s, r) => s + (r.sample_size || 0), 0);
-  const totalSales = rows.reduce((s, r) => s + (r.top_sales || 0), 0);
+  const comparableRows = rows.filter(r => (r.top_sales_source || 'unknown') === 'single');
+  const excludedRows = rows.filter(r => (r.top_sales_source || 'unknown') !== 'single' && r.top_sales != null);
+  const totalSales = comparableRows.reduce((s, r) => s + (r.top_sales || 0), 0);
   const medians = rows.map(r => r.median).filter(v => v != null);
   const medianAvg = medians.length ? Math.round(medians.reduce((a, b) => a + b, 0) / medians.length) : null;
-  const topBrand = rows.slice().sort((a, b) => (b.top_sales || 0) - (a.top_sales || 0))[0];
   const lowBrand = rows.slice().sort((a, b) => (a.median || 1e9) - (b.median || 1e9))[0];
 
   $('kpis').innerHTML = [
     { k: '对比品牌数', v: rows.length, trend: '' },
     { k: '商品样本总数', v: totalSample.toLocaleString(), trend: '' },
-    { k: '均价中位数(¥)', v: medianAvg ?? '—', trend: '' },
+    { k: '均价中位数(¥)', v: medianAvg ?? '—', trend: `价格最低: ${lowBrand ? lowBrand.brand : '—'}` },
     {
-      k: `销量合计 (${sStat.mixed ? '口径混用' : salesLabel(sStat.dominant)})`,
+      k: sStat.mixed ? '单品销量合计 (可比组)' : `销量合计 (${salesLabel(sStat.dominant)})`,
       v: fmtWan(totalSales),
-      trend: sStat.mixed ? '⚠ 口径不一致, 不可直接比' : `价格最低: ${lowBrand ? lowBrand.brand : '—'}`,
+      trend: sStat.mixed
+        ? `⚠ 另 ${excludedRows.length} 个品牌仅店铺累计, 未计入`
+        : '',
     },
   ].map(x => `<div class="kpi"><div class="v">${x.v}</div><div class="k">${x.k}</div><div class="trend">${x.trend}</div></div>`).join('');
 
   // 图表标题随口径变 + 混口径时挂警告条
+  const comparableCnt = rows.filter(r => (r.top_sales_source || 'unknown') === 'single').length;
+  const excludedCnt = rows.filter(r => (r.top_sales_source || 'unknown') !== 'single' && r.top_sales != null).length;
   const salesTitle = sStat.mixed
-    ? '各品牌销量 (⚠ 口径混用: 单品销量 vs 店铺累计, 不可直接比)'
+    ? '各品牌销量 (⚠ 仅可比组连线, 店铺累计另列虚线, 不可混比)'
     : `各品牌${salesLabel(sStat.dominant)} (件)`;
   const ts = document.getElementById('title-sales');
   const td = document.getElementById('title-donut');
   if (ts) ts.textContent = salesTitle;
-  if (td) td.textContent = sStat.mixed ? '销量占比 (⚠ 口径混用)' : `${salesLabel(sStat.dominant)}占比`;
+  // 混口径时占比只在可比组(单品)里算; 店铺累计被剔除, 分母才干净
+  if (td) {
+    td.textContent = sStat.mixed
+      ? `单品销量占比 · 可比组 ${comparableCnt} 个${excludedCnt ? ` (已排除 ${excludedCnt} 个店铺累计品牌)` : ''}`
+      : `${salesLabel(sStat.dominant)}占比`;
+  }
 
   // 图表
   renderPriceChart(brands, rows);
@@ -637,6 +647,52 @@ function renderPriceChart(brands, rows) {
 
 function renderSalesChart(brands, rows) {
   const chart = initChart('chart-sales');
+  const sStat = salesSourceStats(rows);
+
+  // 混口径时不能连线: 一条折线把"5万单品"和"1700万店铺累计"连起来,
+  // 视觉上就在暗示它们同量级同语义 —— 用户第一眼就会得出"OPPO 销量碾压"的假结论。
+  // 拆成两条独立折线 (单品 / 店铺累计), 各自一条线, 中间不连, 图例说明口径。
+  if (sStat.mixed) {
+    const single = rows.filter(r => (r.top_sales_source || 'unknown') === 'single' && r.top_sales != null);
+    const shop = rows.filter(r => (r.top_sales_source || 'unknown') === 'shop_total' && r.top_sales != null);
+    const allBrands = rows.map(r => r.brand);
+    chart.setOption({
+      backgroundColor: 'transparent',
+      grid: { left: 56, right: 20, top: 30, bottom: 34 },
+      tooltip: {
+        trigger: 'axis',
+        formatter: (ps) => {
+          const b = ps[0].axisValue;
+          const r = rows.find(x => x.brand === b) || {};
+          const src = r.top_sales_source || 'unknown';
+          const warn = src === 'shop_total' ? '<br/><span style="color:#ffb020">⚠ 店铺/品牌累计, 非单品销量</span>' : '';
+          return `${b}<br/>${salesLabel(src)}: <b>${fmtWan(r.top_sales || 0)}</b>${warn}`;
+        },
+      },
+      xAxis: { type: 'category', data: allBrands, axisLine: { lineStyle: { color: '#2a4a6a' } }, axisLabel: { color: '#cfe3f5', interval: 0, fontSize: 12 } },
+      yAxis: { type: 'value', axisLabel: { color: '#7f9cc0', formatter: v => fmtWan(v) }, splitLine: { lineStyle: { color: 'rgba(120,150,180,.15)' } } },
+      legend: { top: 0, textStyle: { color: '#cfe3f5', fontSize: 11 }, itemWidth: 14, itemHeight: 10,
+        data: [{ name: '单品销量', itemStyle: { color: '#00eaff' } }, { name: '店铺/品牌累计 (参考)', itemStyle: { color: '#ffb020' } }] },
+      series: [
+        {
+          name: '单品销量', type: 'line', smooth: false, connectNulls: false,
+          symbol: 'circle', symbolSize: 9,
+          data: allBrands.map(b => { const r = single.find(x => x.brand === b); return r ? r.top_sales : null; }),
+          lineStyle: { width: 3, color: '#00eaff' }, itemStyle: { color: '#00eaff' },
+          label: { show: true, position: 'top', color: '#00eaff', formatter: p => p.value == null ? '' : fmtWan(p.value) },
+        },
+        {
+          name: '店铺/品牌累计 (参考)', type: 'line', smooth: false, connectNulls: false,
+          symbol: 'diamond', symbolSize: 10,
+          data: allBrands.map(b => { const r = shop.find(x => x.brand === b); return r ? r.top_sales : null; }),
+          lineStyle: { width: 3, color: '#ffb020', type: 'dashed' }, itemStyle: { color: '#ffb020' },
+          label: { show: true, position: 'top', color: '#ffb020', formatter: p => p.value == null ? '' : fmtWan(p.value) + '\n⚠累计' },
+        },
+      ],
+    }, true);
+    return;
+  }
+
   chart.setOption({
     backgroundColor: 'transparent',
     grid: { left: 56, right: 20, top: 22, bottom: 30 },
@@ -667,10 +723,65 @@ function renderSalesChart(brands, rows) {
 
 function renderDonut(brands, rows) {
   const chart = initChart('chart-donut');
+  const sStat = salesSourceStats(rows);
+
+  // 口径分层: 只把"单品销量"(single) 放同一分母 —— 它们语义一致, 占比才有业务含义。
+  // 店铺累计(shop_total) 不是同一种数, 进分母会得出"OPPO 占 89%"这种假结论, 一律剔除。
+  const comparable = rows.filter(r => (r.top_sales_source || 'unknown') === 'single' && r.top_sales != null && r.top_sales > 0);
+  const excluded = rows.filter(r => (r.top_sales_source || 'unknown') !== 'single' && r.top_sales != null);
+
+  // 口径混用时: 只用可比组画占比; 若可比组一个都没有 → 明确画"无同口径数据", 不骗人
+  if (sStat.mixed) {
+    if (!comparable.length) {
+      chart.clear();
+      chart.setOption({
+        backgroundColor: 'transparent',
+        title: {
+          text: '无可比数据', subtext: '当前品牌销量均为店铺/品牌累计口径\n无法计算占比, 详见下方表格参考组',
+          left: 'center', top: '38%',
+          textStyle: { color: '#ffb020', fontSize: 16 }, subtextStyle: { color: '#7f9cc0', fontSize: 11, lineHeight: 16 },
+        },
+      }, true);
+      return;
+    }
+    chart.setOption({
+      backgroundColor: 'transparent',
+      color: COLORS,
+      tooltip: {
+        trigger: 'item',
+        formatter: (p) => {
+          const r = comparable[p.dataIndex] || {};
+          return `${p.name}<br/>${salesLabel(r.top_sales_source)}: <b>${fmtWan(p.value)}</b> (${p.percent}%)`;
+        },
+      },
+      legend: { bottom: 0, textStyle: { color: '#cfe3f5' }, itemWidth: 12, itemHeight: 12, type: 'scroll' },
+      title: {
+        text: '单品销量占比 (可比组)', left: 'center', top: 4,
+        textStyle: { color: '#cfe3f5', fontSize: 12, fontWeight: 400 },
+        subtext: excluded.length ? `已排除 ${excluded.length} 个店铺累计口径品牌` : '',
+        subtextStyle: { color: '#ffb020', fontSize: 10 },
+      },
+      series: [{
+        type: 'pie', radius: ['42%', '64%'], center: ['50%', '52%'],
+        data: comparable.map(r => ({ name: r.brand, value: r.top_sales || 0 })),
+        label: { color: '#cfe3f5', formatter: '{b}\n{d}%' },
+        itemStyle: { borderColor: '#0a1628', borderWidth: 2 },
+      }],
+    }, true);
+    return;
+  }
+
+  // 口径一致 → 占比才有意义, 正常画环形
   chart.setOption({
     backgroundColor: 'transparent',
     color: COLORS,
-    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => {
+        const r = rows[p.dataIndex] || {};
+        return `${p.name}<br/>${salesLabel(r.top_sales_source)}: <b>${fmtWan(p.value)}</b> (${p.percent}%)`;
+      },
+    },
     legend: { bottom: 0, textStyle: { color: '#cfe3f5' }, itemWidth: 12, itemHeight: 12, type: 'scroll' },
     series: [{
       type: 'pie', radius: ['42%', '66%'], center: ['50%', '46%'],
@@ -678,7 +789,7 @@ function renderDonut(brands, rows) {
       label: { color: '#cfe3f5', formatter: '{b}\n{d}%' },
       itemStyle: { borderColor: '#0a1628', borderWidth: 2 },
     }],
-  });
+  }, true);
 }
 
 function renderInsights(insights, warnings) {
@@ -783,16 +894,19 @@ function renderWordcloud(brands, rows) {
 }
 
 /* 表格 */
+// 表格分两段渲染 (C 方案):
+//   段 1「单品销量可比组」—— top_sales_source === 'single', 销量列是真单品销量, 可横向比。
+//   段 2「店铺/品牌累计参考组」—— shop_total / unknown, 数不可比, 只作背景参考, 明确标注不入图表。
+// 拆表的原因: 同一张表里混排会让读者默认两列同口径, 1700万累计和 5万单品看起来就像"差 340 倍"。
 function renderTable(brands, rows) {
-  const sStat = salesSourceStats(rows);
-  // 销量列头随口径变; 混口径时写"销量(口径见各行)", 避免表头一句"单品销量"盖住两种语义
-  const sHead = sStat.mixed ? '销量 (口径见各行)' : salesLabel(sStat.dominant);
   const low = ['¥100以内', '¥100-300', '¥300-800', '¥800+'];
+  const groupA = rows.filter(r => (r.top_sales_source || 'unknown') === 'single');
+  const groupB = rows.filter(r => (r.top_sales_source || 'unknown') !== 'single');
 
   /* 2 级表头: 价格分档占 4 个子列
      原来 1 个 <td> 里纵向堆 4 个块级 div → 行高 ×4, 且列宽不够时内容折行 (数据被挤到下一行)。
      现在拆成 4 个独立 <td>, 每段一根横向 bar, 行高回到单行。 */
-  $('table-head').innerHTML =
+  const headHtml = (salesHead) =>
     `<tr>`
     + `<th rowspan="2">品牌</th>`
     + `<th rowspan="2">中位价</th>`
@@ -800,14 +914,14 @@ function renderTable(brands, rows) {
     + `<th colspan="4" style="text-align:center;">价格分档 · SKU 数</th>`
     + `<th rowspan="2">高频卖点</th>`
     + `<th rowspan="2">销量冠军</th>`
-    + `<th rowspan="2">${sHead}</th>`
+    + `<th rowspan="2">${salesHead}</th>`
     + `<th rowspan="2">店铺名</th>`
     + `<th rowspan="2">评论数</th>`
     + `</tr><tr>`
     + low.map(l => `<th class="sub">${l}</th>`).join('')
     + `</tr>`;
 
-  $('table-body').innerHTML = rows.map(r => {
+  const rowHtml = (r) => {
     const buckets = [r.bucket_under_100 || 0, r.bucket_100_300 || 0, r.bucket_300_800 || 0, r.bucket_over_800 || 0];
     const max = Math.max(...buckets) || 1;
     const bucketCells = buckets.map((b, i) => {
@@ -818,20 +932,46 @@ function renderTable(brands, rows) {
         + `</td>`;
     }).join('');
     const kws = (r.top_keywords || []).slice(0, 3).map(k => k.keyword).join(' / ');
-    return `<tr>`
+    const isShop = (r.top_sales_source || 'unknown') !== 'single';
+    const salesCell = isShop
+      ? `<td class="nowrap" style="color:#ffb020;">${fmtWan(r.top_sales)} `
+        + `<span style="font-size:11px;white-space:nowrap;" title="列表页 salesTip, 是店铺/品牌历史累计数, 非该单品销量, 不可与他品牌单品销量并列比较">⚠ 累计</span></td>`
+      : `<td class="nowrap">${fmtWan(r.top_sales)}</td>`;
+    return `<tr${isShop ? ' style="background:rgba(255,176,32,.05);"' : ''}>`
       + `<td class="nowrap" style="font-weight:600;color:var(--cyan);">${r.brand}</td>`
       + `<td class="nowrap">¥${r.median ?? '—'}</td>`
       + `<td class="nowrap">¥${r.min ?? '—'} ~ ¥${r.max ?? '—'}</td>`
       + bucketCells
       + `<td title="${kws}">${kws || '—'}</td>`
       + `<td title="${r.top_product || ''}">${(r.top_product || '—').slice(0, 16)}${(r.top_product || '').length > 16 ? '…' : ''}</td>`
-      + `<td class="nowrap">${fmtWan(r.top_sales)}${r.top_sales_source === 'shop_total'
-          ? ' <span style="color:#ffb020;font-size:11px;" title="列表页 salesTip, 是店铺/品牌历史累计数, 非该单品销量">⚠累计</span>'
-          : ''}</td>`
+      + salesCell
       + `<td title="${r.shop_name || ''}">${r.shop_name || '—'}</td>`
       + `<td class="nowrap">${r.comment_count != null ? r.comment_count.toLocaleString() : '—'}</td>`
       + `</tr>`;
-  }).join('');
+  };
+
+  // 只有一组时 (全部同口径) 走原来风格: 常规表头 + 全部行, 不显示分组标题
+  if (!groupA.length || !groupB.length) {
+    const one = groupA.length ? groupA : groupB;
+    const head = one.length ? (one[0].top_sales_source || 'unknown') : 'unknown';
+    $('table-head').innerHTML = headHtml(salesLabel(head));
+    $('table-body').innerHTML = one.map(rowHtml).join('');
+    return;
+  }
+
+  // 混口径 → 双组标题行 + 两段数据; thead 用 group header 拆开, tbody 顺序跟随
+  $('table-head').innerHTML = headHtml('销量');
+  const groupTitleRow = (txt, sub, color) =>
+    `<tr><td colspan="12" style="background:${color};color:#e8f4ff;font-size:12px;font-weight:600;`
+    + `padding:7px 10px;letter-spacing:.3px;">${txt}<span style="font-weight:400;color:#9fc0dd;margin-left:8px;">${sub}</span></td></tr>`;
+
+  const rowsA = groupA.map(rowHtml).join('');
+  const rowsB = groupB.map(rowHtml).join('');
+  $('table-body').innerHTML =
+    groupTitleRow('① 单品销量可比组', '口径一致 (详情页单品销量), 已进入上方图表参与横向比较', 'rgba(0,234,255,.14)')
+    + rowsA
+    + groupTitleRow('② 店铺 / 品牌累计参考组', '仅店铺历史累计数, 口径不同, 未进入图表, 请勿与他组数值并列比较', 'rgba(255,176,32,.16)')
+    + rowsB;
 }
 
 /* ECharts 实例管理 */
