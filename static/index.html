@@ -133,6 +133,23 @@
     .empty-card p { margin: 6px 0; color: var(--text-dim); font-size: 13px; }
     .empty-card code { background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 4px; color: var(--cyan); }
 
+    /* ---------- Day 9 Phase 3: 扫描进度 ---------- */
+    .scan-bar { border: 1px solid var(--line-strong); background: var(--panel);
+      border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; font-size: 13px; }
+    .scan-bar .hd { display: flex; justify-content: space-between; gap: 12px; color: var(--cyan); }
+    .scan-bar .hd .kw { color: var(--text-dim); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .scan-track { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); margin: 9px 0 6px; overflow: hidden; }
+    .scan-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--cyan), var(--blue)); transition: width .4s; }
+    .scan-log { margin: 8px 0 0; padding: 8px 10px; max-height: 108px; overflow: auto;
+      background: rgba(0,0,0,.35); border-radius: 6px; font-family: Consolas, Menlo, monospace;
+      font-size: 11px; line-height: 1.55; color: var(--text-dim); white-space: pre-wrap; word-break: break-all; }
+    .scan-fail { border: 1px solid rgba(248,113,113,.5); background: rgba(248,113,113,.08);
+      border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; font-size: 13px; color: #f87171; }
+    .scan-fail b { color: #fca5a5; }
+    .scan-fail code { background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 4px; color: var(--cyan); }
+    .scan-ok { border: 1px solid rgba(52,211,153,.45); background: rgba(52,211,153,.10);
+      border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; color: #34d399; }
+
     /* ---------- 表格 ---------- */
     .table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
     /* table-layout:fixed + <colgroup> —— 列宽由我们定, 不再被长内容撑宽/把邻居挤到换行 */
@@ -204,11 +221,13 @@
         <button class="btn-glow" style="padding:7px 14px;" id="add-btn" data-page-node-id="cyTW7RqqaJrz9AkD84oH2u">+ 添加</button>
         <span style="width:18px;" data-page-node-id="2LEgNqAmpXNVFmHpNBKNLb"></span>
         <button class="btn-glow" id="generate-btn" data-page-node-id="B7rh9NTOFJVYlLMHtXOpeV">⚡ 生成报告</button>
+        <button class="btn-glow" id="scan-btn" style="padding:7px 14px;background:linear-gradient(135deg,#7dd3fc,#0ea5e9);" title="输入框填品牌名, 自动扫描拼多多并生成报告">📡 扫描并生成</button>
         <span class="loading-ring" id="loading" style="display:none;" data-page-node-id="ATYKG6GeWcvT9hcMbG9tXI"></span>
       </div>
     </div>
 
-    <!-- Day 9: 警告条 (部分失败) + 空态卡片 (全部无数据), 避免静默空白 -->
+    <!-- Day 9: 扫描进度 (Phase 3) + 警告条 (部分失败) + 空态卡片 (全部无数据), 避免静默空白 -->
+    <div id="scan-zone"></div>
     <div id="alert-zone"></div>
     <div id="empty-zone"></div>
 
@@ -419,6 +438,112 @@ async function generate() {
   finally { showLoading(false); }
 }
 
+/* ---------- Day 9 Phase 3: 一键「扫描并生成」 ---------- */
+/* 扫描在后端子进程里跑 (真实页面 30~60s), 前端只 2s 轮询状态:
+   不占住页面、不超时、失败也要把原因说清楚 (B-53 错误带 how_to_fix) */
+let scanTimer = null;
+let scanPolls = 0;
+const SCAN_MAX_POLLS = 300;   // 10 分钟硬上限: 脚本挂死也不能让用户无限等
+
+/* 关键词本身已含品类时不能再拼后缀, 否则会出现 "蓝牙音箱蓝牙耳机" 这种串味关键词 */
+const DEFAULT_SUFFIX = '蓝牙耳机';
+const hasCategory = (kw) => /耳机|耳麦|音箱|充电|数据线|手机壳/.test(kw);
+
+function appendCustomChip(v) {
+  if (!v || selected.has(v)) return;
+  selected.add(v);
+  const chip = document.createElement('span');
+  chip.className = 'chip'; chip.dataset.brand = v;
+  chip.innerHTML = `${v} <span class="x">×</span>`;
+  chip.onclick = () => { selected.delete(v); chip.remove(); };
+  $('chips').appendChild(chip);
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
+
+function renderScan(s) {
+  const kws = s.keywords || [];
+  const done = (s.succeeded || []).length + (s.failed || []).length;
+  const pct = kws.length ? Math.min(100, Math.round(done / kws.length * 100)) : 0;
+  const log = (s.log_tail || []).slice(-4).map(esc).join('\n');
+  $('scan-zone').innerHTML = `<div class="scan-bar">
+    <div class="hd"><span>📡 正在扫描 ${done}/${kws.length}</span><span class="kw">${esc(s.current || '启动中…')}</span></div>
+    <div class="scan-track"><div class="scan-fill" style="width:${pct}%"></div></div>
+    <div style="color:var(--text-dim);">成功 ${(s.succeeded || []).length} · 失败 ${(s.failed || []).length} —— 扫描真实页面需要 30~60 秒</div>
+    ${log ? `<pre class="scan-log">${log}</pre>` : ''}
+  </div>`;
+}
+
+function renderScanDone(s) {
+  const ok = s.succeeded || [], bad = s.failed || [];
+  // 0 商品通常不是"真没数据", 是登录态失效 (见 ecommerce_scan._parse_log 注释)
+  const needLogin = bad.some(f => /登录|0 个商品/.test(f.reason || ''));
+  $('scan-zone').innerHTML = `<div class="${ok.length ? 'scan-ok' : 'scan-fail'}">
+    <b>${ok.length ? '✓ 扫描完成' : '✗ 扫描失败'}</b>
+    ${ok.length ? ` 已拿到数据: <b style="color:var(--cyan);">${ok.map(esc).join('、')}</b>, 正在生成报告…` : ''}
+    ${bad.length ? `<div style="margin-top:6px;">失败 ${bad.length} 个: ${bad.map(f => esc(f.keyword) + ' — ' + esc(f.reason)).join('；')}</div>` : ''}
+    ${needLogin ? `<div style="margin-top:8px;">拼多多登录态可能失效: 在 CDP Chrome 里重新扫码登录后重试。
+      或先跑 <code>scripts/start_pdd_cdp_chrome.ps1</code> 确认 Chrome 已启动 (端口 9223)。</div>` : ''}
+  </div>`;
+}
+
+function stopScan(msg) {
+  clearInterval(scanTimer); scanTimer = null;
+  $('scan-btn').disabled = false; $('generate-btn').disabled = false;
+  if (msg) $('scan-zone').innerHTML = `<div class="scan-fail"><b>✗ ${esc(msg)}</b></div>`;
+}
+
+async function scanAndGenerate() {
+  const kw = ($('custom-input').value || '').trim();
+  if (!kw) {
+    $('scan-zone').innerHTML = `<div class="scan-fail"><b>✗ 先在输入框填品牌名</b> (如 OPPO), 再点「扫描并生成」</div>`;
+    $('custom-input').focus();
+    return;
+  }
+  $('scan-btn').disabled = true; $('generate-btn').disabled = true;
+  $('scan-zone').innerHTML = `<div class="scan-bar"><div class="hd"><span>📡 正在启动扫描…</span></div></div>`;
+  try {
+    const resp = await fetch('/api/scan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keywords: [kw], suffix: hasCategory(kw) ? '' : DEFAULT_SUFFIX }),
+    });
+    if (resp.status === 503) {
+      const d = await resp.json().catch(() => ({}));
+      const detail = d.detail || {};
+      $('scan-zone').innerHTML = `<div class="scan-fail">
+        <b>✗ 连不上本机 Chrome (CDP 9223)</b><br/>${esc(detail.msg || '')}
+        <div style="margin-top:8px;">${esc(detail.how_to_fix || '启动 CDP Chrome 并登录拼多多')}</div></div>`;
+      stopScan(); return;
+    }
+    if (resp.status === 409) { stopScan('已有扫描任务在跑, 等它结束再试'); return; }
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      stopScan(d.detail?.msg || ('HTTP ' + resp.status)); return;
+    }
+    scanPolls = 0;
+    scanTimer = setInterval(pollScan, 2000);
+    pollScan();   // 立刻拉一次, 别让用户干等第一个 2 秒
+  } catch (e) { stopScan(e.message); }
+}
+
+async function pollScan() {
+  if (++scanPolls > SCAN_MAX_POLLS) { stopScan('扫描超时 (10 分钟), 请检查脚本是否卡住'); return; }
+  let s;
+  try {
+    const r = await fetch('/api/scan/status');
+    s = await r.json();
+  } catch (e) { return; }   // 单次网络抖动不终止轮询
+  if (!s || s.status === 'idle') return;
+  if (s.status === 'running') { renderScan(s); return; }
+  clearInterval(scanTimer); scanTimer = null;
+  $('scan-btn').disabled = false; $('generate-btn').disabled = false;
+  renderScanDone(s);
+  (s.succeeded || []).forEach(appendCustomChip);
+  $('custom-input').value = '';
+  if ((s.succeeded || []).length) generate();
+}
+$('scan-btn').onclick = scanAndGenerate;
+
 /* ---------- 渲染 ---------- */
 function fmtWan(n) {
   if (n == null) return '—';
@@ -441,6 +566,9 @@ function salesSourceStats(rows) {
 }
 
 function renderAll(data) {
+  // 报告已经渲染出来了 → 清掉"正在生成报告"的临时成功条 (失败条要留着给用户看原因)
+  const sz = document.getElementById('scan-zone');
+  if (sz && sz.querySelector('.scan-ok')) sz.innerHTML = '';
   const rows = data.rows || [];
   const brands = rows.map(r => r.brand);
   const sStat = salesSourceStats(rows);
