@@ -32,7 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.ecommerce_analyzer import AnalysisPreference, analyze  # noqa: E402
-from app.ecommerce_detail_store import load_latest_detail  # noqa: E402
+from app.ecommerce_detail_store import load_detail_merged  # noqa: E402
 from app.ecommerce_pdd_parser import extract_competitors  # noqa: E402
 from app.ecommerce_url_query import SearchParams, build_search_url  # noqa: E402
 
@@ -278,7 +278,8 @@ def main() -> int:
 
     # 详情页增强数据 (单品销量/店铺名/评论数) —— 没跑过 pdd_detail_enrich.py 就是空 dict,
     # 走降级路径 (用列表页累计销量), 但会在 top_sales_source 里标 "shop_total"。
-    details = load_latest_detail(out_dir)
+    # 用合并视图: 分批补采的品牌各自保留自己的最新记录, 不互相覆盖。
+    details = load_detail_merged(out_dir)
     if details:
         print(f"[detail] 已加载 {len(details)} 个品牌的详情页字段 → 销量口径优先用单品销量")
     else:

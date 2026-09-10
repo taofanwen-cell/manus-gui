@@ -38,23 +38,66 @@ DETAIL_GLOB = "pdd_detail_*.json"
 DetailFields = dict[str, Any]
 
 
+def find_detail_files(data_dir: Path) -> list[Path]:
+    """按 ``(mtime, 文件名)`` **升序**返回所有 ``pdd_detail_*.json``.
+
+    升序是为了让 ``load_detail_merged`` 顺序覆盖 —— 后加载的 (更新的) 文件赢。
+    """
+    if not data_dir.is_dir():
+        return []
+    files = list(data_dir.glob(DETAIL_GLOB))
+    return sorted(files, key=lambda p: (p.stat().st_mtime, p.name))
+
+
 def find_latest_detail_file(data_dir: Path) -> Path | None:
     """在 ``data_dir`` 下找最新的 ``pdd_detail_*.json``.
 
     排序键是 ``(mtime, 文件名)``: 只按 mtime 排时, 同一秒内写入的多个文件
     (测试 / 连续两次扫描) 结果会随机 —— 文件名里的 ``YYYYmmddTHHMMSS`` 正好作为
     稳定的第二判据。
+
+    注意: **多数调用方要的是 ``load_detail_merged``**, 不是这个。单文件语义只适合
+    "我就要最新一批"的场景; 跨品牌对比必须合并, 否则补采新品牌会把旧品牌单品销量
+    丢掉 (2026-09-10 真实踩到: 补采 OPPO 后, 华为/小米等 5 个品牌单品销量全降级成
+    店铺累计)。这个函数仍保留给需要精确单文件语义的调用方。
     """
-    if not data_dir.is_dir():
-        return None
-    files = list(data_dir.glob(DETAIL_GLOB))
-    if not files:
-        return None
-    return max(files, key=lambda p: (p.stat().st_mtime, p.name))
+    files = find_detail_files(data_dir)
+    return files[-1] if files else None
+
+
+def load_detail_merged(data_dir: Path) -> dict[str, DetailFields]:
+    """合并 ``data_dir`` 下**所有** ``pdd_detail_*.json`` → ``{品牌: DetailFields}``.
+
+    为什么是合并而不是取最新一份
+    ----------------------------
+    详情采集是**分批**的 (``--brands OPPO`` 单独补一轮), 每次落一个新时间戳文件。
+    只读最新一份 → 补采哪个品牌, 其它品牌就"消失"了, 跨品牌对比直接失真 (旧品牌被迫
+    降级成列表页累计口径)。
+
+    合并规则: 按 ``(mtime, 文件名)`` 升序加载, **同品牌后加载的覆盖前面的** ——
+    即"每个品牌保留最新一次采到的记录", 各品牌互不干扰。
+
+    坏文件 (JSON 错 / 非 dict) 单个跳过, 不影响其它文件。
+    """
+    merged: dict[str, DetailFields] = {}
+    for path in find_detail_files(data_dir):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        # 只保留 value 是 dict 的条目, 防止坏数据污染下游
+        merged.update({k: v for k, v in raw.items() if isinstance(v, dict)})
+    return merged
 
 
 def load_latest_detail(data_dir: Path) -> dict[str, DetailFields]:
     """加载最新一份详情数据 → ``{品牌: DetailFields}``.
+
+    .. deprecated:: 2026-09-10
+        跨品牌对比请改用 :func:`load_detail_merged`。本函数只读单文件, 会因分批补采
+        丢失其它品牌的单品销量。保留仅为向后兼容 (如确实只想看最新一批)。
 
     任何异常都吞掉返回 ``{}`` —— 详情页是**增强**数据, 缺了不该让主流程挂。
     """
@@ -72,8 +115,11 @@ def load_latest_detail(data_dir: Path) -> dict[str, DetailFields]:
 
 
 def detail_for(brand: str, data_dir: Path) -> DetailFields | None:
-    """取单个品牌的详情字段; 没采集过返回 ``None`` (调用方需降级)."""
-    return load_latest_detail(data_dir).get(brand.strip())
+    """取单个品牌的详情字段; 没采集过返回 ``None`` (调用方需降级).
+
+    用合并视图, 保证"单独补采别的品牌"不会让这个品牌查不到。
+    """
+    return load_detail_merged(data_dir).get(brand.strip())
 
 
 def get_single_sales(brand: str, data_dir: Path) -> int | None:

@@ -117,9 +117,15 @@ def test_report_missing_keyword_returns_200_with_warnings(tmp_path: Path):
     """向后兼容契约: 全都没数据也不能 500 —— 返回 200 + rows:[] + warnings。
 
     前端据此渲染空态卡片 (而不是抛错或空白)。
+
+    注意: 必须显式注入 ``html_source``。只传 ``cache_dir`` 时 create_app 会用默认的
+    ``FileHTMLSource(Path("data"))`` 去扫**真实项目 data/ 目录** —— 本地一旦真扫过
+    OPPO (CDP 产物), 这条 "OPPO 应该没数据" 的断言就会挂。这是测试自身对"data/ 为空"
+    的隐含依赖, 不是产品 bug (2026-09-10 真实踩到)。
     """
     # 只放一个真实存在的品牌, 但请求一个没扫过的
-    app = create_app(cache_dir=tmp_path)
+    empty_src = FileHTMLSource(tmp_path / "empty-data")
+    app = create_app(html_source=empty_src, cache_dir=tmp_path)
     c = TestClient(app)
     resp = c.post("/api/competitor-report", json={"brands": ["OPPO"], "top_n": 5})
     assert resp.status_code == 200

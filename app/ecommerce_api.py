@@ -34,7 +34,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ecommerce_analyzer import AnalysisPreference, analyze
-from app.ecommerce_detail_store import load_latest_detail
+from app.ecommerce_detail_store import load_detail_merged
 from app.ecommerce_scan import (
     STATUS_RUNNING,
     ScanState,
@@ -348,7 +348,11 @@ def build_report(
 
     # 详情页增强数据: 单品销量 / 店铺名 / 评论数。缺了不报错 —— 走降级并且在
     # top_sales_source 里标 "shop_total", 让前端/insight 知道这数字不能当单品比。
-    details: dict = load_latest_detail(detail_dir) if detail_dir is not None else {}
+    #
+    # 用 **合并视图** (所有 pdd_detail_*.json 合并, 每品牌取最新): 详情采集是分批的
+    # (单独补采某品牌会落新文件), 只读最新一份会让旧品牌单品销量消失 → 被迫降级,
+    # 跨品牌口径就不统一了 (2026-09-10 真实踩到)。详见 ecommerce_detail_store。
+    details: dict = load_detail_merged(detail_dir) if detail_dir is not None else {}
     if detail_dir is not None and not details:
         global_warnings.append(
             "未找到 data/pdd_detail_*.json (详情页单品销量), 销量降级为列表页店铺/品牌累计, 不可当单品比"

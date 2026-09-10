@@ -22,6 +22,7 @@ from app.ecommerce_detail_store import (
     detail_for,
     find_latest_detail_file,
     get_single_sales,
+    load_detail_merged,
     load_latest_detail,
 )
 from scripts.ecommerce_brand_compare import (
@@ -138,6 +139,58 @@ def test_detail_for_and_get_single_sales(tmp_path: Path):
     assert get_single_sales("漫步者", tmp_path) == 113_000
     # 没采过的品牌
     assert detail_for("不存在的品牌", tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# 合并视图 —— 分批补采不能丢旧品牌 (2026-09-10 真实 bug 的回归防线)
+# ---------------------------------------------------------------------------
+
+
+def test_merged_keeps_old_brand_when_new_file_only_has_new_brand(tmp_path: Path):
+    """核心回归: 补采 OPPO 落新文件后, 华为的单品销量必须还在。
+
+    真实场景: 先采 6 个品牌 → 生成 detail_A.json; 再单独补采 OPPO + 万魔 →
+    生成 detail_B.json (只有 OPPO/万魔)。旧实现只读最新一份 → 华为/小米等全部
+    "消失", 被迫降级成店铺累计口径, 跨品牌再也没法统一比较。
+    """
+    _write_detail(tmp_path, "pdd_detail_20260907T174522.json",
+                  {"华为": {"single_sales": 53_000}, "小米": {"single_sales": 259_000}})
+    _write_detail(tmp_path, "pdd_detail_20260910T191830.json",
+                  {"OPPO": {"single_sales": 156_000}, "万魔": {"single_sales": 1_472_000}})
+
+    merged = load_detail_merged(tmp_path)
+    assert merged["华为"]["single_sales"] == 53_000   # 旧品牌没丢
+    assert merged["小米"]["single_sales"] == 259_000
+    assert merged["OPPO"]["single_sales"] == 156_000  # 新品牌也进来了
+    assert merged["万魔"]["single_sales"] == 1_472_000
+    # detail_for 走合并视图, 同样能查到旧品牌
+    assert detail_for("华为", tmp_path)["single_sales"] == 53_000
+
+
+def test_merged_same_brand_newest_wins(tmp_path: Path):
+    """同一品牌采了两次 → 保留最新那份 (按 (mtime, 文件名) 升序覆盖)。"""
+    import os
+    import time
+
+    old = _write_detail(tmp_path, "pdd_detail_20260101T000000.json", {"华为": {"single_sales": 1}})
+    time.sleep(0.02)
+    new = _write_detail(tmp_path, "pdd_detail_20260907T174522.json", {"华为": {"single_sales": 53_000}})
+    os.utime(old, (old.stat().st_atime, old.stat().st_mtime - 10))  # 确保 old 更旧
+
+    assert load_detail_merged(tmp_path)["华为"]["single_sales"] == 53_000
+
+
+def test_merged_bad_file_skipped_others_survive(tmp_path: Path):
+    """单个坏文件不能连累其它文件 (合并语义要比单文件更宽容)。"""
+    (tmp_path / "pdd_detail_bad.json").write_text("{not json", encoding="utf-8")
+    _write_detail(tmp_path, "pdd_detail_good.json", {"华为": {"single_sales": 53_000}})
+
+    merged = load_detail_merged(tmp_path)
+    assert merged["华为"]["single_sales"] == 53_000
+
+
+def test_merged_missing_dir_returns_empty(tmp_path: Path):
+    assert load_detail_merged(tmp_path / "nope") == {}
     assert get_single_sales("不存在的品牌", tmp_path) is None
 
 
