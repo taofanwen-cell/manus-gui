@@ -141,13 +141,26 @@ def test_pick_ear_type_priority() -> None:
 
 
 def test_price_prefers_priceInfo() -> None:
-    # price=50290(分) 是原价 ¥502.9, priceInfo="402.9" 是券后价 -> 取 402.
-    assert _price_to_yuan({"price": 50290, "priceInfo": "402.9"}) == 402
+    # price=50290(分)=¥502.9 是原价, priceInfo="402.9" 是券后价 -> 取 403 (四舍五入).
+    assert _price_to_yuan({"price": 50290, "priceInfo": "402.9"}) == 403
+
+
+def test_price_rounds_not_truncates() -> None:
+    # 历史 bug: int(float("1.88"))=1 截断. 现在 round -> 2.
+    assert _price_to_yuan({"price": 188, "priceInfo": "1.88"}) == 2
+    assert _price_to_yuan({"price": 12699, "priceInfo": "126.99"}) == 127
+    assert _price_to_yuan({"price": 6016, "priceInfo": "60.16"}) == 60
+
+
+def test_price_priceInfo_beats_price_when_they_disagree() -> None:
+    # 真实数据: priceInfo 与 price 口径不同 (券后 vs 原价), 必须固定取 priceInfo.
+    assert _price_to_yuan({"price": 5960, "priceInfo": "50.4"}) == 50   # 不是 60
+    assert _price_to_yuan({"price": 9890, "priceInfo": "93.9"}) == 94   # 不是 99
 
 
 def test_price_fallback_to_cents() -> None:
-    assert _price_to_yuan({"price": 188, "priceInfo": ""}) == 1
-    assert _price_to_yuan({"price": 691}) == 6
+    assert _price_to_yuan({"price": 188, "priceInfo": ""}) == 2
+    assert _price_to_yuan({"price": 691}) == 7
 
 
 def test_price_unknown() -> None:
@@ -167,7 +180,7 @@ def test_goods_to_competitor_field_mapping() -> None:
     }
     c = goods_to_competitor(goods)
     assert c.goods_id == "994664413472"
-    assert c.price_cny == 1
+    assert c.price_cny == 2
     assert c.monthly_sales == 7148
     assert c.rating is None
     assert c.comment_count is None
@@ -232,11 +245,11 @@ def test_extract_competitors_count() -> None:
 def test_extract_competitors_mapping() -> None:
     comps = extract_competitors(FIXTURE_HTML)
     c0, c1, c2 = comps
-    assert c0.goods_id == "111" and c0.price_cny == 1 and c0.monthly_sales == 7148
+    assert c0.goods_id == "111" and c0.price_cny == 2 and c0.monthly_sales == 7148
     assert "蓝牙5.3" in c0.feature_tags
-    assert c1.goods_id == "222" and c1.price_cny == 6 and c1.monthly_sales == 22000
+    assert c1.goods_id == "222" and c1.price_cny == 7 and c1.monthly_sales == 22000
     assert "不入耳" in c1.feature_tags and "入耳" not in c1.feature_tags
-    assert c2.goods_id == "333" and c2.price_cny == 402 and c2.monthly_sales == 17
+    assert c2.goods_id == "333" and c2.price_cny == 403 and c2.monthly_sales == 17
 
 
 def test_extract_competitors_empty_when_no_rawdata() -> None:
