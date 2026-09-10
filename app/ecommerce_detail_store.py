@@ -39,13 +39,18 @@ DetailFields = dict[str, Any]
 
 
 def find_latest_detail_file(data_dir: Path) -> Path | None:
-    """在 ``data_dir`` 下找最新 (mtime 最大) 的 ``pdd_detail_*.json``."""
+    """在 ``data_dir`` 下找最新的 ``pdd_detail_*.json``.
+
+    排序键是 ``(mtime, 文件名)``: 只按 mtime 排时, 同一秒内写入的多个文件
+    (测试 / 连续两次扫描) 结果会随机 —— 文件名里的 ``YYYYmmddTHHMMSS`` 正好作为
+    稳定的第二判据。
+    """
     if not data_dir.is_dir():
         return None
     files = list(data_dir.glob(DETAIL_GLOB))
     if not files:
         return None
-    return max(files, key=lambda p: p.stat().st_mtime)
+    return max(files, key=lambda p: (p.stat().st_mtime, p.name))
 
 
 def load_latest_detail(data_dir: Path) -> dict[str, DetailFields]:

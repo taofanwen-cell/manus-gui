@@ -21,7 +21,9 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
@@ -180,6 +182,33 @@ class CompetitorBrandRow(BaseModel):
     comment_count: int | None = None
 
 
+class CacheEntry(BaseModel):
+    """一个已缓存关键词的扫描结果文件."""
+
+    keyword: str
+    file: str
+    size_bytes: int
+    #: 文件 mtime (ISO 8601, 秒精度); 解析不出来时为 ``None``
+    mtime: str | None = None
+    #: 距现在多少小时 (前端判断"数据是不是太旧")
+    age_hours: float | None = None
+
+
+class CacheStatusResponse(BaseModel):
+    """``GET /api/cache-status`` 响应.
+
+    让前端/用户知道**现在有哪些关键词能直接出报告**, 不用猜 —— 查一个没扫过的
+    关键词时, 前端据此给"去扫描"而不是空白。
+    """
+
+    data_dir: str
+    #: 按 keyword 去重, 每个只留最新那份
+    entries: list[CacheEntry] = Field(default_factory=list)
+    #: 便捷字段: 可直接用的关键词列表
+    keywords: list[str] = Field(default_factory=list)
+    total: int = 0
+
+
 class CompetitorReportResponse(BaseModel):
     brands: list[str]
     rows: list[CompetitorBrandRow]
@@ -309,6 +338,69 @@ def build_report(
     )
 
 
+#: 扫描产物文件名: ``pdd_raw_<keyword>_<YYYYmmddTHHMMSS>.html``
+_CACHE_FILE_RE = re.compile(r"^pdd_raw_(?P<kw>.+?)_(?P<ts>\d{8}T\d{6})\.html$")
+#: 早期产物只有时间戳, 没有 keyword 段: ``pdd_raw_<YYYYmmddTHHMMSS>.html``
+_CACHE_FILE_NO_KW_RE = re.compile(r"^pdd_raw_(?P<ts>\d{8}T\d{6})\.html$")
+
+
+def build_cache_status(data_dir: Path) -> CacheStatusResponse:
+    """列出 ``data/pdd_raw_*.html`` 里已缓存的关键词.
+
+    为什么需要: 查一个没扫过的关键词 (比如 "OPPO") 时, 报告端点只会把它丢进
+    ``warnings`` 然后 rows 为空 —— 用户看到的是一片空白, 不知道"是没数据"还是
+    "系统坏了"。有了这个接口, 前端能明确说"缓存里没有 OPPO, 去扫一下"。
+
+    只读 + 容错: 目录不存在 / 文件名不合规 → 不抛异常, 返回空列表。
+    """
+    entries: dict[str, CacheEntry] = {}
+    if not data_dir.is_dir():
+        return CacheStatusResponse(data_dir=str(data_dir))
+
+    now = datetime.now()
+    # keyword -> (entry, 原始 mtime 浮点)。同一 keyword 多次扫描时按 mtime 取最新;
+    # mtime 相同 (同秒写入) 时再按文件名兜底, 保证结果稳定不随机。
+    latest_ts: dict[str, float] = {}
+    for path in data_dir.glob("pdd_raw_*.html"):
+        m = _CACHE_FILE_RE.match(path.name)
+        if m:
+            keyword = m.group("kw")
+        else:
+            m2 = _CACHE_FILE_NO_KW_RE.match(path.name)
+            # 认不出 keyword 的文件也列出来 (避免"有文件但查不到"的困惑), 用文件名当 keyword
+            keyword = m2.group("ts") if m2 else path.name[len("pdd_raw_"): -len(".html")]
+
+        try:
+            stat = path.stat()
+            mt = datetime.fromtimestamp(stat.st_mtime)
+            mtime_iso = mt.replace(microsecond=0).isoformat()
+            age = round((now - mt).total_seconds() / 3600, 1)
+        except OSError:
+            continue
+
+        # 同一 keyword 可能扫过多次 → 只留最新那份
+        prev_ts = latest_ts.get(keyword)
+        if prev_ts is not None and (prev_ts > stat.st_mtime or (prev_ts == stat.st_mtime and entries[keyword].file >= path.name)):
+            continue
+        latest_ts[keyword] = stat.st_mtime
+        entries[keyword] = CacheEntry(
+            keyword=keyword,
+            file=path.name,
+            size_bytes=stat.st_size,
+            mtime=mtime_iso,
+            age_hours=age,
+        )
+
+    # 按 keyword 排序, 输出稳定 (便于测试 diff 和前端展示)
+    ordered = sorted(entries.values(), key=lambda e: e.keyword)
+    return CacheStatusResponse(
+        data_dir=str(data_dir),
+        entries=ordered,
+        keywords=[e.keyword for e in ordered],
+        total=len(ordered),
+    )
+
+
 # ---------------------------------------------------------------------------
 # App Factory
 # ---------------------------------------------------------------------------
@@ -319,11 +411,13 @@ def create_app(
     html_source: HTMLSource | None = None,
     insight_gen: LLMInsightGenerator | None = None,
     detail_dir: Path | None = None,
+    cache_dir: Path | None = None,
 ) -> FastAPI:
     """FastAPI 工厂. ``html_source`` / ``insight_gen`` 都可注入, 便于测试.
 
     ``detail_dir``: 详情页字段目录, 给了就让销量优先用**单品销量**。
     默认从 ``FileHTMLSource.data_dir`` 推断 (即 ``data/``)。
+    ``cache_dir``: 缓存清单目录 (``GET /api/cache-status`` 读的), 同样默认随 ``data/``。
     """
     if html_source is None:
         # data/ 相对项目根; FastAPI 启动时 cwd 就是项目根
@@ -332,6 +426,10 @@ def create_app(
         insight_gen = StubInsightGenerator()
     if detail_dir is None and isinstance(html_source, FileHTMLSource):
         detail_dir = html_source.data_dir
+    if cache_dir is None and isinstance(html_source, FileHTMLSource):
+        cache_dir = html_source.data_dir
+    if cache_dir is None:
+        cache_dir = Path("data")
 
     app = FastAPI(
         title="拼多多竞品调研 API",
@@ -363,6 +461,7 @@ def create_app(
     _html = html_source
     _gen = insight_gen
     _detail_dir = detail_dir
+    _cache_dir = cache_dir
 
     @app.get("/api/health")
     def health() -> dict:
@@ -371,6 +470,11 @@ def create_app(
     @app.get("/api/brands")
     def brands() -> dict:
         return {"default_brands": list(DEFAULT_BRANDS)}
+
+    @app.get("/api/cache-status", response_model=CacheStatusResponse)
+    def cache_status() -> CacheStatusResponse:
+        """已缓存的关键词清单 —— 前端据此告诉用户"哪些能直接查 / 哪些要先扫"。"""
+        return build_cache_status(_cache_dir)
 
     @app.post("/api/competitor-report", response_model=CompetitorReportResponse)
     def competitor_report(req: CompetitorReportRequest) -> CompetitorReportResponse:

@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-bs-theme="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="zh-CN" data-bs-theme="dark" data-page-node-id="53oefEzZpNNnvETsYMbFuL">
+<head data-page-node-id="Hf2rDBTBsFiWKlSculQYBj">
+  <meta charset="UTF-8" data-page-node-id="blmUHyBCWrDSW59i7pztrZ">
+  <meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="kK4PQSg6oNfZ7LrFUix09k">
   <title>拼多多竞品调研 · 数据大屏</title>
-  <link rel="stylesheet" href="/static/bootstrap.min.css">
+  <link rel="stylesheet" href="/static/bootstrap.min.css" data-page-node-id="ZIJDI58mz8Ju3C3ck654sS">
   <script src="/static/vendor/echarts.min.js"></script>
   <script src="/static/vendor/echarts-wordcloud.min.js"></script>
   <style>
@@ -121,13 +121,39 @@
     .insight-warning .tag { background: rgba(248,113,113,.15); color: #f87171; }
     .insight-hot .tag { background: rgba(245,197,24,.15); color: var(--gold); }
 
+    /* ---------- 警告条 / 空态卡片 (Day 9: 失败要响, 不再静默空白) ---------- */
+    .alert-bar { border: 1px solid rgba(245,197,24,.45); background: rgba(245,197,24,.10);
+      border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; color: #f5c518; }
+    .alert-bar b { color: #ffd85e; }
+    .alert-bar ul { margin: 6px 0 0; padding-left: 18px; }
+    .alert-bar li { margin: 2px 0; }
+    .empty-card { border: 1px solid rgba(248,113,113,.5); background: rgba(248,113,113,.08);
+      border-radius: 10px; padding: 26px 22px; text-align: center; }
+    .empty-card h4 { margin: 0 0 8px; color: #f87171; font-size: 16px; }
+    .empty-card p { margin: 6px 0; color: var(--text-dim); font-size: 13px; }
+    .empty-card code { background: rgba(0,0,0,.3); padding: 2px 6px; border-radius: 4px; color: var(--cyan); }
+
     /* ---------- 表格 ---------- */
     .table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-    table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
-    table.data th, table.data td { padding: 10px 12px; text-align: left; border-bottom: 1px solid rgba(120,150,180,.12); }
+    /* table-layout:fixed + <colgroup> —— 列宽由我们定, 不再被长内容撑宽/把邻居挤到换行 */
+    table.data { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+    table.data th, table.data td {
+      padding: 8px 10px; text-align: left; border-bottom: 1px solid rgba(120,150,180,.12);
+      overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+    }
+    /* 文本列 nowrap —— "¥82 ~ ¥949" / "5000万" 这类不该被折成两行 */
+    table.data th, table.data td.nowrap { white-space: nowrap; }
     table.data th { color: var(--cyan-dim); font-weight: 600; }
+    /* 2 级表头的子列头 (¥100以内 / ¥100-300 / ...) */
+    table.data th.sub { font-size: 11px; font-weight: 400; color: #7f9cc0; text-align: center; }
+    table.data thead tr:first-child th { border-bottom: 1px solid var(--line); }
     table.data tbody tr:hover { background: rgba(0,224,255,.05); }
     .bar-mini { display: inline-block; height: 7px; border-radius: 3px; background: linear-gradient(90deg, var(--cyan), var(--blue)); }
+
+    /* 价格分档: 每个价位段独立成一列, bar 横向铺满 (原为 1 个 td 里纵向堆 4 个 div → 行高 ×4) */
+    td.pd-cell { padding: 6px 7px !important; white-space: nowrap; }
+    .pd-val { font-size: 12px; font-weight: 600; color: #cfe3f5; line-height: 1.15; }
+    .pd-bar { height: 5px; border-radius: 3px; margin-top: 3px; min-width: 2px; transition: width .2s; }
 
     /* 四角发光角标 */
     .corner { position: absolute; width: 14px; height: 14px; border-color: var(--line-strong); border-style: solid; }
@@ -143,112 +169,122 @@
     .view.show { display: block; }
   </style>
 </head>
-<body>
-<div class="app">
+<body data-page-node-id="Ot1FBktlXFm87no4rW7UWv">
+<div class="app" data-page-node-id="xkkSIQ1BsfmsXm0hKARDu3">
   <!-- 侧边栏 -->
-  <aside class="sidebar">
-    <div class="brand">
-      <div class="logo">竞</div>
-      <div>
-        <div class="name">竞品情报大屏</div>
-        <div class="sub">拼多多 · 蓝牙耳机</div>
+  <aside class="sidebar" data-page-node-id="EW0vOj7zsgBUAQvFTdrSj6">
+    <div class="brand" data-page-node-id="XFilJGcreYXID7Azal9Rr0">
+      <div class="logo" data-page-node-id="ayoLbWCzzimm7Tro0velGT">竞</div>
+      <div data-page-node-id="5hR81ciDYfj6blp2sQgUHY">
+        <div class="name" data-page-node-id="MNFYNeKpg9kVvCUnJ0Hs0E">竞品情报大屏</div>
+        <div class="sub" data-page-node-id="3YtmUo09rTkX6ZkAMGI5MM">拼多多 · 蓝牙耳机</div>
       </div>
     </div>
-    <div class="menu">
-      <div class="menu-item active" data-view="overview"><span class="ico">📊</span> 总览大屏</div>
-      <div class="menu-item" data-view="price"><span class="ico">📈</span> 价格分析</div>
-      <div class="menu-item" data-view="wordcloud"><span class="ico">☁️</span> 卖点词云</div>
-      <div class="menu-item" data-view="table"><span class="ico">📋</span> 品牌对比</div>
+    <div class="menu" data-page-node-id="z6qYYLxiF0pDOHvT9i0n5d">
+      <div class="menu-item active" data-view="overview" data-page-node-id="zbZfAGVgqG6auo67NCOd76"><span class="ico" data-page-node-id="EyFCoehZYocfEWevhn6YA5">📊</span> 总览大屏</div>
+      <div class="menu-item" data-view="price" data-page-node-id="vGE3QDYPJSclVuzFUvems3"><span class="ico" data-page-node-id="eGWS31qGrGzFzRUffDNeMS">📈</span> 价格分析</div>
+      <div class="menu-item" data-view="wordcloud" data-page-node-id="OyvSxnFX2VkCBtcOGaIMeT"><span class="ico" data-page-node-id="uJhTbIIvCEjFFYJkY3DHKU">☁️</span> 卖点词云</div>
+      <div class="menu-item" data-view="table" data-page-node-id="e5I33u0Vuk7sfhOdCYHxRI"><span class="ico" data-page-node-id="Zywwb1SqsgSDUVfGeiJ4qr">📋</span> 品牌对比</div>
     </div>
   </aside>
 
   <!-- 主区 -->
-  <main class="main">
-    <div class="topbar">
-      <div class="title">拼多多 <span class="hl">蓝牙耳机</span> 竞品调研</div>
-      <div class="time" id="clock"></div>
+  <main class="main" data-page-node-id="SHQMOzDYGlUpGnLbH1Aoxy">
+    <div class="topbar" data-page-node-id="mYr9APc2HXUsSRApo44uXs">
+      <div class="title" data-page-node-id="q43pkTeYA3ZFXHOXY9S3fC">拼多多 <span class="hl" data-page-node-id="KO9AYRx73MQFLU59uN2wKR">蓝牙耳机</span> 竞品调研</div>
+      <div class="time" id="clock" data-page-node-id="k5uaKgktkClvOcPnPKxnEd"></div>
     </div>
 
     <!-- 条件面板 -->
-    <div class="ctrl">
-      <div class="lbl">▸ 选择对比品牌</div>
-      <div class="chips" id="chips"></div>
-      <div class="chips" style="margin-top:10px;">
-        <input class="c-input" id="custom-input" placeholder="加自定义品牌, 如 OPPO" maxlength="16">
-        <button class="btn-glow" style="padding:7px 14px;" id="add-btn">+ 添加</button>
-        <span style="width:18px;"></span>
-        <button class="btn-glow" id="generate-btn">⚡ 生成报告</button>
-        <span class="loading-ring" id="loading" style="display:none;"></span>
+    <div class="ctrl" data-page-node-id="OfYO2Kbr0lcREME3wHxS4r">
+      <div class="lbl" data-page-node-id="i6dzE1HwmxD8OG67E0EcFT">▸ 选择对比品牌</div>
+      <div class="chips" id="chips" data-page-node-id="QRob8E784zMVsiGFntqKI9"></div>
+      <div class="chips" style="margin-top:10px;" data-page-node-id="ETN2lVhSUkHdkhaqGhl0BV">
+        <input class="c-input" id="custom-input" placeholder="加自定义品牌, 如 OPPO" maxlength="16" data-page-node-id="Bh5iKuarUcu4VGqWxECZ8J">
+        <button class="btn-glow" style="padding:7px 14px;" id="add-btn" data-page-node-id="cyTW7RqqaJrz9AkD84oH2u">+ 添加</button>
+        <span style="width:18px;" data-page-node-id="2LEgNqAmpXNVFmHpNBKNLb"></span>
+        <button class="btn-glow" id="generate-btn" data-page-node-id="B7rh9NTOFJVYlLMHtXOpeV">⚡ 生成报告</button>
+        <span class="loading-ring" id="loading" style="display:none;" data-page-node-id="ATYKG6GeWcvT9hcMbG9tXI"></span>
       </div>
     </div>
 
+    <!-- Day 9: 警告条 (部分失败) + 空态卡片 (全部无数据), 避免静默空白 -->
+    <div id="alert-zone"></div>
+    <div id="empty-zone"></div>
+
     <!-- 总览大屏 -->
-    <section class="view show" id="view-overview">
-      <div class="kpis" id="kpis"></div>
-      <div class="grid">
-        <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> 各品牌价格中位数 (¥)</div>
-          <div class="chart" id="chart-price"></div>
+    <section class="view show" id="view-overview" data-page-node-id="FkKuonhjV0g6Ot4LId9HGk">
+      <div class="kpis" id="kpis" data-page-node-id="89xIlbk03a55w24RQrr5gV"></div>
+      <div class="grid" data-page-node-id="p6sXkBmL25hy2f7pPLE9z5">
+        <div class="panel" data-page-node-id="5RqFesG6dc93qj41MHUZAd"><span class="corner tl" data-page-node-id="o8DCDgbVjw3xJn2luXDNFQ"></span><span class="corner br" data-page-node-id="CcGLNkamcOPLRLyL7XnC0H"></span>
+          <div class="h5" data-page-node-id="5ztKYMqSAw3Ux7E1XKfgZp"><span class="dot" data-page-node-id="7QUWJ9M39K7AGuzcedYB7B"></span> 各品牌价格中位数 (¥)</div>
+          <div class="chart" id="chart-price" data-page-node-id="Mwpy9kGyGf1uTb6ZAOjzw0"></div>
         </div>
-        <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> <span id="title-sales">各品牌销量</span></div>
-          <div class="chart" id="chart-sales"></div>
+        <div class="panel" data-page-node-id="RfcK5ASk8CsciEbbUQs6NP"><span class="corner tl" data-page-node-id="u56ImtCwCcvTGt1W2Q6IFD"></span><span class="corner br" data-page-node-id="Ml49GlVpj3a3nWQ7HINoh4"></span>
+          <div class="h5" data-page-node-id="fRBiLfvL6olySTEwrJhowU"><span class="dot" data-page-node-id="4ooezK8hyEhMfr8NjUh25m"></span> <span id="title-sales" data-page-node-id="aWGJ6J5B1hgP3UWSe1aJRd">各品牌销量</span></div>
+          <div class="chart" id="chart-sales" data-page-node-id="pLNQXlif65OsbarKk2NdZN"></div>
         </div>
-        <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> <span id="title-donut">销量占比</span></div>
-          <div class="chart" id="chart-donut"></div>
+        <div class="panel" data-page-node-id="dQtb3lxiqoUtiEd2UA66Hx"><span class="corner tl" data-page-node-id="nN5WQZFb9WQvRF1oBjS8M9"></span><span class="corner br" data-page-node-id="GjLAWw0Vyz7hNn0BwCcUeA"></span>
+          <div class="h5" data-page-node-id="KKtzxyt4GOQfviJzsm1Hyq"><span class="dot" data-page-node-id="BiKAP2CTMEoAlEDrAD6cFr"></span> <span id="title-donut" data-page-node-id="VXkvGY00C4fK5siBWUKWEd">销量占比</span></div>
+          <div class="chart" id="chart-donut" data-page-node-id="VE8AqDqmqAaGUgztCZJqqA"></div>
         </div>
       </div>
-      <div class="grid grid-2" style="margin-top:16px;">
-        <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> 业务洞察</div>
-          <div id="insights"></div>
+      <div class="grid grid-2" style="margin-top:16px;" data-page-node-id="BUgaoKNoLmeLlejGBPzA96">
+        <div class="panel" data-page-node-id="R5NElGyaLqBLW72bFOapf3"><span class="corner tl" data-page-node-id="cNEDQ29kJNUE5fBOVAHvfJ"></span><span class="corner br" data-page-node-id="Hxj6yXAQCKxCv6I7xc8hnM"></span>
+          <div class="h5" data-page-node-id="68gOhSHRrnApVceOV6ehWT"><span class="dot" data-page-node-id="5lIuxiVh38sTjGYF5b2IGe"></span> 业务洞察</div>
+          <div id="insights" data-page-node-id="3v4IEWGoxNhsZQQxFdVWyB"></div>
         </div>
-        <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> 建议关注</div>
-          <div id="gap-notes" class="text-muted" style="font-size:13px;color:var(--text-dim)"></div>
+        <div class="panel" data-page-node-id="AgJozXTf5aDkw9mOZXjD33"><span class="corner tl" data-page-node-id="QVmTzO7hLsFtA4LFcGMzsA"></span><span class="corner br" data-page-node-id="zIb6hL599fR4WCg9KB1CGL"></span>
+          <div class="h5" data-page-node-id="1l9v5IOgXZ04ZafaHAgHUk"><span class="dot" data-page-node-id="VKQKLQLjATzIdmHwVHt4l0"></span> 建议关注</div>
+          <div id="gap-notes" class="text-muted" style="font-size:13px;color:var(--text-dim)" data-page-node-id="juJmMRLHXAgnWAZrHIUKHp"></div>
         </div>
       </div>
     </section>
 
     <!-- 价格分析 -->
-    <section class="view" id="view-price">
-      <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-        <div class="h5"><span class="dot"></span> 各品牌价格分档分布 (¥100以内 / 100-300 / 300-800 / 800+)</div>
-        <div class="chart tall" id="chart-bucket"></div>
+    <section class="view" id="view-price" data-page-node-id="p9t3dadtSC2dsPuLfEqx0A">
+      <div class="panel" data-page-node-id="WmFvw9RVHDwHf2djOaA1cG"><span class="corner tl" data-page-node-id="w9bpVp12ntdcCs5FaOCTrz"></span><span class="corner br" data-page-node-id="O7n3ECXlBo0BPNqUeIal9q"></span>
+        <div class="h5" data-page-node-id="oH9bpDHahEnGmskQKia6NJ"><span class="dot" data-page-node-id="9ZHQDoL22yHDX3ZAHeSRwG"></span> 各品牌价格分档分布 (¥100以内 / 100-300 / 300-800 / 800+)</div>
+        <div class="chart tall" id="chart-bucket" data-page-node-id="MH2OUrsUWVtffwZvspfKPI"></div>
       </div>
-      <div class="grid grid-2" style="margin-top:16px;">
-        <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> 价格区间对比</div>
-          <div class="chart" id="chart-range"></div>
+      <div class="grid grid-2" style="margin-top:16px;" data-page-node-id="MzevTndjFU0gziZ3ozfKpF">
+        <div class="panel" data-page-node-id="iFj1g1gV3a7HEL4Cc8cVg5"><span class="corner tl" data-page-node-id="86v6d2iTf5vZ1PZcovT9l8"></span><span class="corner br" data-page-node-id="bB9UO4x10DNRzPIoubL657"></span>
+          <div class="h5" data-page-node-id="dt7NSMD2YF3VDvvtlvElEw"><span class="dot" data-page-node-id="tljjmK5BK7XrVxXaoE0XPX"></span> 价格区间对比</div>
+          <div class="chart" id="chart-range" data-page-node-id="kK4A1EM2cNHwDlfCIEVItv"></div>
         </div>
-        <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-          <div class="h5"><span class="dot"></span> 高频卖点分布</div>
-          <div class="chart" id="chart-keywords"></div>
+        <div class="panel" data-page-node-id="MdVOOLv29k3x40wM5f9pim"><span class="corner tl" data-page-node-id="eZQZpY5mHiMRL6Qrm8uC7o"></span><span class="corner br" data-page-node-id="OToaiYS1PiMksTvi7oCGA3"></span>
+          <div class="h5" data-page-node-id="wRvCIIq69hU1bfTCqt8Inb"><span class="dot" data-page-node-id="WkJjZLRPA9wZdztCDtOGIG"></span> 高频卖点分布</div>
+          <div class="chart" id="chart-keywords" data-page-node-id="vrEAJMeGIZW7XwehxGpcJQ"></div>
         </div>
       </div>
     </section>
 
     <!-- 词云 -->
-    <section class="view" id="view-wordcloud">
-      <div class="panel"><span class="corner tl"></span><span class="corner br"></span>
-        <div class="h5"><span class="dot"></span> 卖点关键词云 (字号=出现频次)</div>
-        <div class="chart tall" id="chart-wordcloud" style="height:340px;"></div>
+    <section class="view" id="view-wordcloud" data-page-node-id="7aE7m7ldCBJaVVJS1mZD7s">
+      <div class="panel" data-page-node-id="GXqNohvX2UJeL7RsZD2rWW"><span class="corner tl" data-page-node-id="ZbTdGdMRxtcvq0HCNweR9t"></span><span class="corner br" data-page-node-id="0zCDYFVjeEPJhIpoRdBqcA"></span>
+        <div class="h5" data-page-node-id="PATCNlXyBwrDFOGowrqil8"><span class="dot" data-page-node-id="GCeOBKgq23DXJFvH8ceDmj"></span> 卖点关键词云 (字号=出现频次)</div>
+        <div class="chart tall" id="chart-wordcloud" style="height:340px;" data-page-node-id="GlMm4FMFh1k9FgIXLgSRyJ"></div>
       </div>
     </section>
 
     <!-- 品牌对比表 -->
-    <section class="view" id="view-table">
-      <div class="table-wrap">
-        <div class="h5" style="font-size:14px;color:var(--cyan-dim);margin-bottom:12px;"><span class="dot"></span> 品牌对比明细表</div>
-        <table class="data">
-          <thead><tr id="table-head"></tr></thead>
-          <tbody id="table-body"></tbody>
+    <section class="view" id="view-table" data-page-node-id="5bCsuxNCMNGrIoqgj9Ka5p">
+      <div class="table-wrap" data-page-node-id="FCs5pZexATDPCvphwoFNGr">
+        <div class="h5" style="font-size:14px;color:var(--cyan-dim);margin-bottom:12px;" data-page-node-id="hDUFEFkrOHHexCMFnM8fBj"><span class="dot" data-page-node-id="eL3Z2PcWTwcytqk3FlS3HU"></span> 品牌对比明细表</div>
+        <table class="data" data-page-node-id="cFFnEuhwoalvP0mjyJZNaz">
+          <colgroup data-page-node-id="LBDyaaBpPI0oMLOS0NJRCg">
+            <col style="width:8%" data-page-node-id="sSrnGqMDKXcfEPRRzZYJMU"><col style="width:7%" data-page-node-id="v9zmBXhr5cuFv5vh2iWe64"><col style="width:11%" data-page-node-id="LSjUIfs82oBjzBATEm92d8">
+            <col style="width:6%" data-page-node-id="YVqNGFSRJa370TPSGH8iFJ"><col style="width:6%" data-page-node-id="A6wniD1lw7TQ7ZwQUUkKpX"><col style="width:6%" data-page-node-id="l9BGwn29qJkbH1tEOtaPBG"><col style="width:6%" data-page-node-id="EdEZrK6Ul7hkA0fVViK7mC">
+            <col style="width:14%" data-page-node-id="e0i4Mj4bBV0XRdcaiwdNGu"><col style="width:13%" data-page-node-id="oEeCmSQ8I2BoVZy9KvDO47"><col style="width:9%" data-page-node-id="n8a89ADFTAafxdYn1rVC2c">
+            <col style="width:9%" data-page-node-id="3WX8w4IfoCgETEoBDfHtxW"><col style="width:5%" data-page-node-id="uQOhknD07ShqE52PFgC0YL">
+          </colgroup>
+          <thead id="table-head" data-page-node-id="KinsySZl09BPqulNMJBNvI"></thead>
+          <tbody id="table-body" data-page-node-id="OkajnJtDQ0ojPeaUQpoQcE"></tbody>
         </table>
       </div>
     </section>
 
-    <div class="footer">数据来源：拼多多搜索列表真实数据 · 本机登录 CDP 只读扫描 · FastAPI · ECharts</div>
+    <div class="footer" data-page-node-id="GIKL4jNSzCooFEwTtZA3Qo">数据来源：拼多多搜索列表真实数据 · 本机登录 CDP 只读扫描 · FastAPI · ECharts</div>
   </main>
 </div>
 
@@ -308,6 +344,52 @@ function err(msg) {
   $('gap-notes').innerHTML = '';
 }
 
+/* ---------- Day 9: 失败要响 ---------- */
+/* 部分品牌无数据 → 报告顶部黄色警告条, 别让用户以为数据是完整的 */
+function renderAlert(warnings) {
+  const el = $('alert-zone');
+  if (!warnings || !warnings.length) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="alert-bar">
+    <b>⚠ 部分数据缺失</b> (${warnings.length} 条) — 以下关键词没有缓存数据, 报告中已跳过:
+    <ul>${warnings.map(w => `<li>${w}</li>`).join('')}</ul>
+  </div>`;
+}
+
+/* 全部无数据 → 显式空态卡片 (含"缓存里现在有什么" + 怎么扫), 不再是空白四视图 */
+async function renderEmpty(requested, warnings) {
+  document.querySelectorAll('.view').forEach(v => { v.style.display = 'none'; });
+  // 空态卡片已包含全部原因, 顶部警告条会重复 → 清掉
+  $('alert-zone').innerHTML = '';
+  const el = $('empty-zone');
+  el.innerHTML = `<div class="empty-card">
+    <h4>没有可展示的数据</h4>
+    <p>请求的关键词: <b style="color:var(--cyan);">${requested.join('、')}</b></p>
+    <p style="text-align:left;margin-top:12px;">${(warnings || []).map(w => '· ' + w).join('<br/>') || '· 原因未知'}</p>
+    <p style="margin-top:14px;">这些关键词需要先扫描才有数据。缓存里现有的关键词:
+      <span id="cached-kws" style="color:var(--cyan);">加载中…</span></p>
+    <p style="margin-top:10px;">扫描方式: 先跑 <code>scripts/start_pdd_cdp_chrome.ps1</code>
+      起 Chrome 并登录拼多多, 再执行<br/>
+      <code>.venv\\Scripts\\python.exe scripts\\ecommerce_brand_compare.py --brands ${requested.slice(0, 3).join(' ')}</code></p>
+  </div>`;
+  // 拉缓存清单, 告诉用户"现在能查什么"
+  try {
+    const r = await fetch('/api/cache-status');
+    const d = await r.json();
+    const kw = (d.keywords || []).join('、') || '（空）';
+    const span = document.getElementById('cached-kws');
+    if (span) span.textContent = kw;
+  } catch (e) {
+    const span = document.getElementById('cached-kws');
+    if (span) span.textContent = '（读取失败）';
+  }
+}
+
+function clearEmpty() {
+  $('empty-zone').innerHTML = '';
+  document.querySelectorAll('.view').forEach(v => { v.style.display = ''; });
+  Object.values(charts).forEach(c => c && c.resize());
+}
+
 async function generate() {
   const brands = [...selected];
   if (!brands.length) { err('请至少选 1 个品牌'); return; }
@@ -322,10 +404,16 @@ async function generate() {
       throw new Error(e.detail?.msg || ('HTTP ' + resp.status));
     }
     const data = await resp.json();
-    if (!data.rows || !data.rows.length) {
-      throw new Error('没有拿到数据。' + (data.warnings && data.warnings[0] ? data.warnings[0] : '请确认所选品牌已扫描过'));
-    }
     reportData = data;
+    renderAlert(data.warnings);
+    if (!data.rows || !data.rows.length) {
+      // Day 9: 不 throw —— 渲染显式空态卡片, 告诉用户缺什么 + 怎么补
+      await renderEmpty(brands, data.warnings);
+      $('insights').innerHTML = '';
+      $('gap-notes').innerHTML = '';
+      return;
+    }
+    clearEmpty();
     renderAll(data);
   } catch (e) { err(e.message); }
   finally { showLoading(false); }
@@ -571,28 +659,50 @@ function renderTable(brands, rows) {
   const sStat = salesSourceStats(rows);
   // 销量列头随口径变; 混口径时写"销量(口径见各行)", 避免表头一句"单品销量"盖住两种语义
   const sHead = sStat.mixed ? '销量 (口径见各行)' : salesLabel(sStat.dominant);
-  const head = ['品牌', '中位价', '价格区间', '价格分档(低/中/高/顶)', '高频卖点', '销量冠军', sHead, '店铺名', '评论数'];
-  $('table-head').innerHTML = head.map(h => `<th>${h}</th>`).join('');
   const low = ['¥100以内', '¥100-300', '¥300-800', '¥800+'];
+
+  /* 2 级表头: 价格分档占 4 个子列
+     原来 1 个 <td> 里纵向堆 4 个块级 div → 行高 ×4, 且列宽不够时内容折行 (数据被挤到下一行)。
+     现在拆成 4 个独立 <td>, 每段一根横向 bar, 行高回到单行。 */
+  $('table-head').innerHTML =
+    `<tr>`
+    + `<th rowspan="2">品牌</th>`
+    + `<th rowspan="2">中位价</th>`
+    + `<th rowspan="2">价格区间</th>`
+    + `<th colspan="4" style="text-align:center;">价格分档 · SKU 数</th>`
+    + `<th rowspan="2">高频卖点</th>`
+    + `<th rowspan="2">销量冠军</th>`
+    + `<th rowspan="2">${sHead}</th>`
+    + `<th rowspan="2">店铺名</th>`
+    + `<th rowspan="2">评论数</th>`
+    + `</tr><tr>`
+    + low.map(l => `<th class="sub">${l}</th>`).join('')
+    + `</tr>`;
+
   $('table-body').innerHTML = rows.map(r => {
     const buckets = [r.bucket_under_100 || 0, r.bucket_100_300 || 0, r.bucket_300_800 || 0, r.bucket_over_800 || 0];
     const max = Math.max(...buckets) || 1;
-    const bars = buckets.map((b, i) => {
+    const bucketCells = buckets.map((b, i) => {
       const pct = Math.round(b / max * 100);
-      return `<div style="margin:2px 0;"><span style="font-size:11px;color:#7f9cc0;">${low[i]}</span>
-        <div class="bar-mini" style="width:${pct}%;background:${COLORS[i % COLORS.length]};"></div>
-        <span style="font-size:11px;color:#cfe3f5;"> ${b}</span></div>`;
+      return `<td class="pd-cell" title="${low[i]}：${b} 个 SKU">`
+        + `<div class="pd-val">${b}</div>`
+        + `<div class="pd-bar" style="width:${b ? pct : 0}%;background:${COLORS[i % COLORS.length]};"></div>`
+        + `</td>`;
     }).join('');
     const kws = (r.top_keywords || []).slice(0, 3).map(k => k.keyword).join(' / ');
-    return `<tr><td style="font-weight:600;color:var(--cyan);">${r.brand}</td>
-      <td>¥${r.median ?? '—'}</td><td>¥${r.min ?? '—'} ~ ¥${r.max ?? '—'}</td>
-      <td>${bars}</td><td>${kws || '—'}</td>
-      <td>${(r.top_product || '—').slice(0, 16)}${(r.top_product||'').length > 16 ? '…' : ''}</td>
-      <td>${fmtWan(r.top_sales)}${r.top_sales_source === 'shop_total'
-        ? ' <span style="color:#ffb020;font-size:11px;" title="列表页 salesTip, 是店铺/品牌历史累计数, 非该单品销量">⚠累计</span>'
-        : ''}</td>
-      <td>${r.shop_name || '—'}</td>
-      <td>${r.comment_count != null ? r.comment_count.toLocaleString() : '—'}</td></tr>`;
+    return `<tr>`
+      + `<td class="nowrap" style="font-weight:600;color:var(--cyan);">${r.brand}</td>`
+      + `<td class="nowrap">¥${r.median ?? '—'}</td>`
+      + `<td class="nowrap">¥${r.min ?? '—'} ~ ¥${r.max ?? '—'}</td>`
+      + bucketCells
+      + `<td title="${kws}">${kws || '—'}</td>`
+      + `<td title="${r.top_product || ''}">${(r.top_product || '—').slice(0, 16)}${(r.top_product || '').length > 16 ? '…' : ''}</td>`
+      + `<td class="nowrap">${fmtWan(r.top_sales)}${r.top_sales_source === 'shop_total'
+          ? ' <span style="color:#ffb020;font-size:11px;" title="列表页 salesTip, 是店铺/品牌历史累计数, 非该单品销量">⚠累计</span>'
+          : ''}</td>`
+      + `<td title="${r.shop_name || ''}">${r.shop_name || '—'}</td>`
+      + `<td class="nowrap">${r.comment_count != null ? r.comment_count.toLocaleString() : '—'}</td>`
+      + `</tr>`;
   }).join('');
 }
 
