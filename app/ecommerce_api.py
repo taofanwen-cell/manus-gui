@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +35,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ecommerce_analyzer import AnalysisPreference, analyze
 from app.ecommerce_detail_store import load_latest_detail
+from app.ecommerce_scan import (
+    STATUS_RUNNING,
+    ScanState,
+    Scanner,
+    StubScanner,
+    SubprocessScanner,
+)
 from app.ecommerce_insight import (
     Insight,
     LLMInsightGenerator,
@@ -192,6 +200,54 @@ class CacheEntry(BaseModel):
     mtime: str | None = None
     #: 距现在多少小时 (前端判断"数据是不是太旧")
     age_hours: float | None = None
+
+
+class ScanRequest(BaseModel):
+    """``POST /api/scan`` 请求体 — 触发一次真实扫描 (需要本机 CDP Chrome 已登录)."""
+
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"keywords": ["OPPO"], "suffix": "蓝牙耳机"}]}
+    )
+
+    keywords: list[str] = Field(
+        min_length=1,
+        max_length=20,
+        description="要扫描的关键词/品牌列表",
+    )
+    suffix: str | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "拼在关键词后面的搜索词 (默认脚本内的 '蓝牙耳机')。"
+            "关键词本身已含品类时传空字符串, 避免出现 '蓝牙音箱蓝牙耳机'。"
+        ),
+    )
+
+    @field_validator("keywords")
+    @classmethod
+    def _clean(cls, v: list[str]) -> list[str]:
+        out = []
+        for kw in v:
+            kw = (kw or "").strip()
+            if not kw:
+                raise ValueError("关键词不能为空")
+            if len(kw) > 32:
+                raise ValueError(f"关键词过长 (>32 字符): {kw!r}")
+            # 关键词会进 argv 和文件名, 路径分隔符/控制字符必须挡掉
+            if any(ch in kw for ch in "/\\\x00"):
+                raise ValueError(f"关键词含非法字符: {kw!r}")
+            out.append(kw)
+        if not out:
+            raise ValueError("至少提供 1 个关键词")
+        return out
+
+
+class ScanResponse(BaseModel):
+    job_id: str
+    status: str
+    keywords: list[str]
+    #: 提示语: 多久回来查状态
+    hint: str = "轮询 GET /api/scan/status 查看进度"
 
 
 class CacheStatusResponse(BaseModel):
@@ -412,6 +468,7 @@ def create_app(
     insight_gen: LLMInsightGenerator | None = None,
     detail_dir: Path | None = None,
     cache_dir: Path | None = None,
+    scanner: Scanner | None = None,
 ) -> FastAPI:
     """FastAPI 工厂. ``html_source`` / ``insight_gen`` 都可注入, 便于测试.
 
@@ -430,6 +487,9 @@ def create_app(
         cache_dir = html_source.data_dir
     if cache_dir is None:
         cache_dir = Path("data")
+    if scanner is None:
+        # 生产: 真 Popen 扫描脚本。测试注入 StubScanner → CI 零 CDP 依赖。
+        scanner = SubprocessScanner(cdp_url=os.getenv("PDD_CDP_URL", "http://127.0.0.1:9223"))
 
     app = FastAPI(
         title="拼多多竞品调研 API",
@@ -462,6 +522,7 @@ def create_app(
     _gen = insight_gen
     _detail_dir = detail_dir
     _cache_dir = cache_dir
+    _scanner = scanner
 
     @app.get("/api/health")
     def health() -> dict:
@@ -475,6 +536,54 @@ def create_app(
     def cache_status() -> CacheStatusResponse:
         """已缓存的关键词清单 —— 前端据此告诉用户"哪些能直接查 / 哪些要先扫"。"""
         return build_cache_status(_cache_dir)
+
+    # -------------------------------------------------------------------
+    # 扫描服务化 (Day 9 Phase 2): 子进程 + 单飞锁, 不阻塞事件循环
+    # -------------------------------------------------------------------
+
+    @app.post("/api/scan", response_model=ScanResponse)
+    def scan(req: ScanRequest) -> ScanResponse:
+        """触发一次扫描.
+
+        - CDP 不通 → 503 + 怎么开 Chrome 的指引 (而不是让用户在 UI 上干等)
+        - 已有任务在跑 → 409 (单飞锁, 防风控 + 防并发写坏 data/)
+        """
+        ok, msg = _scanner.probe()
+        if not ok:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "CDP_UNAVAILABLE",
+                    "msg": msg,
+                    "how_to_fix": "先跑 scripts/start_pdd_cdp_chrome.ps1 启动 Chrome 并手动登录拼多多, 再重试",
+                },
+            )
+        if _scanner.is_busy():
+            cur = _scanner.snapshot()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "SCAN_BUSY",
+                    "msg": "已有扫描任务在跑, 请等它结束",
+                    "job_id": cur.job_id,
+                    "status": cur.to_dict(),
+                },
+            )
+        try:
+            job_id = _scanner.start(req.keywords, req.suffix)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail={"code": "BAD_KEYWORD", "msg": str(e)})
+        st = _scanner.snapshot()
+        return ScanResponse(job_id=job_id, status=st.status, keywords=list(req.keywords))
+
+    @app.get("/api/scan/status")
+    def scan_status() -> dict:
+        """当前/最近一次扫描任务的状态 (可高频轮询).
+
+        ``failed`` 里的每个条目都带 reason —— 0 商品大概率是登录态失效,
+        不是"这个品牌真没商品", 前端要把这个区别说清楚。
+        """
+        return _scanner.snapshot().to_dict()
 
     @app.post("/api/competitor-report", response_model=CompetitorReportResponse)
     def competitor_report(req: CompetitorReportRequest) -> CompetitorReportResponse:
