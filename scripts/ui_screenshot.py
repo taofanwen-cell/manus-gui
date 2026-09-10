@@ -50,12 +50,16 @@ def main() -> int:
     ap.add_argument("--out-dir", default="data")
     ap.add_argument("--width", type=int, default=1600)
     ap.add_argument("--height", type=int, default=1000)
+    ap.add_argument("--channel", default="chrome",
+                    help="playwright 浏览器通道; 'chrome' 用本机系统 Chrome (免下载), "
+                         "'chromium' 用 playwright 自带版本 (需 playwright install chromium)")
+    ap.add_argument("--headful", action="store_true", help="有头模式 (调试用)")
     args = ap.parse_args()
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        print("需要 playwright: ./.venv/Scripts/python.exe -m pip install playwright && playwright install chromium")
+        print("需要 playwright: ./.venv/Scripts/python.exe -m pip install playwright")
         return 2
 
     out_dir = ROOT / args.out_dir
@@ -63,8 +67,12 @@ def main() -> int:
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
     shots: list[Path] = []
 
+    launch_kw: dict = {"headless": not args.headful}
+    if args.channel:
+        launch_kw["channel"] = args.channel
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(**launch_kw)
         page = browser.new_page(viewport={"width": args.width, "height": args.height})
         page.goto(args.base, wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
