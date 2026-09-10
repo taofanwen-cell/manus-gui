@@ -110,7 +110,9 @@ def main() -> int:
         page.wait_for_timeout(1500)
 
         for key, sel, label in VIEWS:
-            # 页面菜单是 <div class="menu-item" data-view="...">, 视图用 .show 控制显隐
+            # 页面菜单是 <div class="menu-item" data-view="...">, 视图用 .show 控制显隐。
+            # 切换后必须 resize(): 隐藏视图里初始化的 ECharts 宽度为 0, 不 resize 会
+            # 截图成"图表挤在左边"(真实菜单点击也会 resize, 这里保持一致)。
             page.evaluate(
                 """(key) => {
                     document.querySelectorAll('.view').forEach(v => v.classList.remove('show'));
@@ -119,6 +121,9 @@ def main() -> int:
                     document.querySelectorAll('.menu-item').forEach(m => {
                         m.classList.toggle('active', m.dataset.view === key);
                     });
+                    // charts 是顶层 const, 在全局词法环境但非 window 属性,
+                    // 直接写 charts 即可访问。
+                    try { Object.values(charts).forEach(c => c && c.resize()); } catch (e) {}
                 }""",
                 key,
             )

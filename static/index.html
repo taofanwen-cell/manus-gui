@@ -976,7 +976,19 @@ function renderTable(brands, rows) {
 
 /* ECharts 实例管理 */
 function initChart(id) {
-  if (!charts[id]) charts[id] = echarts.init(document.getElementById(id));
+  if (!charts[id]) {
+    const el = document.getElementById(id);
+    charts[id] = echarts.init(el);
+    // 若初始化时容器处于隐藏视图 (.view 无 .show -> display:none), 宽度为 0,
+    // ECharts 会锁死成一个很小的默认宽度, 之后切到该视图看起来"图表挤在左边"。
+    // 用 ResizeObserver 在容器真正拿到尺寸时补一次 resize, 根治该问题。
+    if (typeof ResizeObserver !== 'undefined' && el) {
+      const ro = new ResizeObserver(() => {
+        if (el.clientWidth > 0) charts[id].resize();
+      });
+      ro.observe(el);
+    }
+  }
   return charts[id];
 }
 
