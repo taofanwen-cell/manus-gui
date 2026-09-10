@@ -5,7 +5,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> 基于 CDP 反爬 + FastAPI 服务化的多品牌拼多多蓝牙耳机竞品横向对比工具，含价格分档、卖点聚合、单品销量、详情页字段增强、可选 LLM 业务洞察、深色大屏 ECharts 前端。163 个单测零回归。
+> 基于 CDP 反爬 + FastAPI 服务化的多品牌拼多多蓝牙耳机竞品横向对比工具，含价格分档、卖点聚合、单品销量、详情页字段增强、可选 LLM 业务洞察、深色大屏 ECharts 前端，以及 **Web UI 输入任意关键词一键扫描出报告**。212 个单测零回归。
 
 ---
 
@@ -19,7 +19,9 @@
 | **服务化** | FastAPI + Pydantic schema 收口 + CORS + 静态资源 mount |
 | **可选 LLM** | DashScope (OpenAI 兼容) + 网络失败自动降级 StubInsightGenerator |
 | **Web 前端** | 单文件深色大屏 ECharts (4 视图), 离线可用, 零构建链 |
-| **测试守护** | 163 个 pytest 用例, sandbox/CI 离线可跑 (不需真实 CDP / LLM key) |
+| **一键扫描** | 输入任意品牌 → `POST /api/scan` 起子进程扫拼多多 → 2s 轮询进度 → 自动出报告 |
+| **失败要响** | CDP 不通 503 / 重复提交 409 / 脏关键词 422 / 无数据渲染空态卡片, 都带修复指引 |
+| **测试守护** | 212 个 pytest 用例, sandbox/CI 离线可跑 (不需真实 CDP / LLM key) |
 
 ---
 
@@ -44,6 +46,8 @@ bash scripts/stop_demo.sh            # 跨平台 (Win/Mac/Linux 都行)
 ```
 
 `demo.sh` 自动做 4 件事: ① 检测本机 CDP Chrome (在线则跑扫描) → ② 启 FastAPI 后台 → ③ 等健康检查 → ④ 打开浏览器。
+
+> **任意关键词即查**: 打开 Web UI 后在输入框填品牌名 (如 `OPPO`), 点 **📡 扫描并生成** —— 后端起子进程扫拼多多 (30~60s), 前端 2s 轮询进度条 + 日志尾行, 扫完自动生成四视图报告。不用再手动跑脚本。
 
 ### 2. 手动步骤 (如果你想自己控每一步)
 
@@ -104,6 +108,9 @@ $env:PDD_CDP_URL = 'http://127.0.0.1:9223'
 | GET | `/docs` | Swagger UI (Try it out 已预填真实品牌示例) |
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/brands` | 返回默认 6 品牌列表 |
+| GET | `/api/cache-status` | 列出 `data/` 里**已有缓存**的关键词 (按 keyword 去重取最新) + mtime/size/age |
+| POST | `/api/scan` | **起子进程扫拼多多** (需要本机 CDP Chrome 已登录) |
+| GET | `/api/scan/status` | 轮询扫描进度: `idle` / `running` / `done` / `failed` + 日志尾 20 行 |
 | POST | `/api/competitor-report` | 主端点: 6 品牌横向对比 + 业务洞察 |
 
 请求示例:
@@ -112,6 +119,29 @@ curl -X POST http://127.0.0.1:8001/api/competitor-report \
   -H 'Content-Type: application/json' \
   -d '{"brands":["华为","小米","倍思","QCY","万魔","漫步者"],"top_n":20,"include_insights":true}'
 ```
+
+**扫描流程** (Web UI 的「📡 扫描并生成」就是调这两条):
+```bash
+# 1. 先看现有缓存, 避免白扫
+curl http://127.0.0.1:8001/api/cache-status
+
+# 2. 触发扫描 (suffix 默认拼 '蓝牙耳机'; 关键词已含品类就传 "")
+curl -X POST http://127.0.0.1:8001/api/scan \
+  -H 'Content-Type: application/json' \
+  -d '{"keywords":["OPPO"],"suffix":"蓝牙耳机"}'
+
+# 3. 轮询直到 status != running
+curl http://127.0.0.1:8001/api/scan/status
+```
+
+扫描端点的错误码设计 (前端据此给不同提示):
+
+| 状态码 | code | 含义 / 用户该做什么 |
+|---|---|---|
+| 503 | `CDP_UNAVAILABLE` | CDP Chrome 没起 → 跑 `scripts/start_pdd_cdp_chrome.ps1` 并登录拼多多 |
+| 409 | `SCAN_BUSY` | 已有任务在跑 (单飞锁, 防风控/防并发写坏 `data/`) → 等它结束 |
+| 422 | — | 关键词非法 (空 / >32 字符 / 含 `/ \ \x00`) |
+| 200 | — | 已启动, 轮询 `scan/status` |
 
 返回 (节选):
 ```json
@@ -136,7 +166,7 @@ curl -X POST http://127.0.0.1:8001/api/competitor-report \
 ```bash
 cd upstream/manus-gui
 ./.venv/Scripts/python.exe -m pytest -q tests/test_ecommerce_*.py
-# → 163 passed
+# → 212 passed
 ```
 
 涵盖 (CI 在 ubuntu + py3.11 上跑同一组命令):
@@ -144,9 +174,12 @@ cd upstream/manus-gui
 - `test_ecommerce_url_query.py` (41) — 拼多多 URL 构造 + 自然语言解析
 - `test_ecommerce_pdd_parser.py` (39) — `window.rawData` 提取 + 销量文案
 - `test_ecommerce_pdd_detail.py` (10) — 详情页 3 种销量文案 + 店铺名/评论数
+- `test_ecommerce_sales_semantics.py` (20) — 单品销量 vs 店铺累计口径贯穿
 - `test_ecommerce_brand_compare.py` (5) — 6 品牌压行
 - `test_ecommerce_insight.py` (21) — 4 段洞察 + LLM 兜底链路
 - `test_ecommerce_api.py` (18) — FastAPI 端点 + CORS + schema
+- `test_ecommerce_cache_status.py` (10) — 缓存清单 (空目录/去重/旧式文件名)
+- `test_ecommerce_scan_api.py` (19) — 日志反解 + 503/409/422 + 单飞锁
 
 **不跑** `test_ctrip_cdp_setup.py` / `test_pdd_cdp_*.py` (要真实 Chrome + 桌面 CDP 通道)。
 
@@ -162,23 +195,28 @@ upstream/manus-gui/
 │   ├── ecommerce_analyzer.py      # 价格分档/排序/聚合 (480 行)
 │   ├── ecommerce_pdd_parser.py    # window.rawData + 详情页解析
 │   ├── ecommerce_insight.py       # LLM 总结层 + Stub 兜底
-│   └── ecommerce_api.py            # FastAPI 服务 (3 端点)
+│   ├── ecommerce_detail_store.py  # 详情页产物读取 (单品销量)
+│   ├── ecommerce_scan.py          # 扫描服务化: 子进程 + 单飞锁 + 状态轮询
+│   └── ecommerce_api.py            # FastAPI 服务 (5 端点)
 ├── scripts/
 │   ├── start_pdd_cdp_chrome.ps1   # 启专用 Chrome 9223
 │   ├── pdd_cdp_extract.py         # 只读扫描脚本
 │   ├── ecommerce_competitor_report.py  # 单品牌报告
 │   ├── ecommerce_brand_compare.py      # 6 品牌横向对比
 │   ├── pdd_detail_enrich.py           # 详情页字段增强
-│   └── ecommerce_brand_compare_html.py # 离线 HTML 报告
+│   ├── ecommerce_brand_compare_html.py # 离线 HTML 报告
+│   └── demo.sh / stop_demo.sh         # 一键 demo / 跨平台停服
 ├── static/
-│   ├── index.html                 # 深色大屏前端
+│   ├── index.html                 # 深色大屏前端 (含一键扫描)
 │   └── vendor/                    # echarts.min.js (离线)
 ├── data/
 │   ├── pdd_raw_<品牌>_<时间戳>.html
-│   └── ui_overview2.png 等        # 前端截图
-├── tests/test_ecommerce_*.py      # 160 测试
+│   ├── pdd_detail_enrich_<时间戳>.json
+│   └── ui_*.png                   # 前端截图
+├── tests/test_ecommerce_*.py      # 212 测试
 ├── requirements-ecommerce.txt     # 最小依赖
-└── docs/handoff/                  # 设计决策日志 (Day 1-7.5)
+├── docs/handoff/                  # 设计决策日志 (Day 1-9)
+└── docs/BUG_PLAYBOOK.md           # 67 条真实踩坑知识库 (症状可检索)
 ```
 
 ---
@@ -211,12 +249,26 @@ upstream/manus-gui/
 ### 5. 测试在 sandbox 离线可跑
 - `FileHTMLSource` 默认从 `data/` 读 HTML, 不发起网络请求
 - LLM 走 Stub, 不绑 API key
-- 测试 163 个零依赖外部资源, 已接 GitHub Actions CI
+- 扫描器走 Protocol 注入 (`create_app(scanner=StubScanner())`), CI 零 CDP 依赖
+- 测试 212 个零依赖外部资源, 已接 GitHub Actions CI
+
+### 6. 扫描跑子进程而不是 in-process
+- 扫描脚本含 playwright/CDP 全局状态, 崩了会连累 API 进程 → `subprocess.Popen` 隔离
+- stdout 重定向**临时文件**而非 PIPE (PIPE 写满会卡死子进程)
+- handler 提交即返回, 状态靠 `GET /api/scan/status` 轮询 → 不阻塞事件循环
+- 单飞锁: 重复提交 409, 防风控 + 防并发写坏 `data/`
+
+### 7. 数值必须带口径
+- 列表页 `salesTip` 是**店铺/品牌累计**, 详情页"热销/已抢/总售 N 件"才是**单品销量**
+- 两个数**不能混着比** (比的是"谁开店久"而不是"谁卖得好")
+- 所以 `top_sales` 一定配 `top_sales_source` 一起传, 前端按口径切标签 + 打 `⚠累计` 角标
 
 ---
 
 ## 📚 详细文档
 
+- `docs/BUG_PLAYBOOK.md` — **67 条真实踩坑知识库** (症状可检索 + 动手前 Checklist)
+- `docs/handoff/2026-09-10_任意关键词即查_实施提示词.md` — Day 9 扫描服务化设计
 - `docs/handoff/2026-09-05_OPENMANUS_CTRIP_PROJECT_HANDOVER.md` — 整体交接
 - `docs/handoff/2026-09-06_CTRIP_FORM_EXECUTOR_IMPLEMENTATION.md` — 状态机模式可参考
 - `.workbuddy/memory/2026-09-07.md` — Day 1-7.5 决策日志

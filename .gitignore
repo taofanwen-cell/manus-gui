@@ -229,6 +229,7 @@ node_modules
 # Local DashScope credential file (never commit).
 config/.dashscope_api_key
 
-# Local Chrome profile used only for user-authorized Ctrip CDP sessions.
-runtime/ctrip-cdp-chrome-profile/
+# Local Chrome profiles used only for user-authorized CDP sessions.
+# 整个 runtime/ 都是本机运行时产物 (Chrome profile 数百 MB), 一律不入库.
+runtime/
 
