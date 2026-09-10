@@ -499,6 +499,17 @@
 - **修法**：空态走专用卡片 `renderEmpty(requested, warnings)` —— 说明原因 + 列出缓存里现有的关键词 + 给出扫描指引；部分失败走黄色警告条 `renderAlert`。
 - **判断规则**：**空数据和失败是两种不同状态，都要有专门的 UI**，且都要说清楚"用户下一步能做什么"。
 
+### B-67b ECharts 在隐藏视图里初始化 → 宽度塌陷 ★
+- **症状**：切到某个视图，图表挤在左侧一条窄缝里，右侧大片空白（柱状/词云尤其明显）。
+- **根因**：容器所在 `.view` 是 `display:none` 时调 `echarts.init()` —— `clientWidth=0`，ECharts 锁死成一个很小的默认宽度。之后切到该视图若不 resize，就一直是小尺寸。
+- **隐蔽性**：真实用户点菜单时若恰好带 `resize()` 就看不见；但**首屏即渲染隐藏视图 + 截图脚本直接切 class** 两条路径都会暴露。
+- **修法**（根治）：`initChart` 里挂 `ResizeObserver`，容器一拿到真实宽度就 `resize()`：
+  ```js
+  const ro = new ResizeObserver(() => { if (el.clientWidth > 0) charts[id].resize(); });
+  ro.observe(el);
+  ```
+- **判断规则**：**任何在隐藏容器里初始化的 canvas/chart/地图，都要监容器尺寸补 resize**，别依赖调用方记得调。
+
 ### B-68 `connect_over_cdp` 180s 超时的真根因：Chrome 根本不在 ★★
 - **症状**：`playwright.chromium.connect_over_cdp("http://127.0.0.1:9223")` 卡满 180s 后超时；`curl /json/version` 时好时坏。
 - **误诊经历（代价巨大）**：先怀疑"target 太多握手慢"（实测只有 4 个 target，不是原因）、再怀疑"僵尸 ESTABLISHED 连接占用"（`netstat` 确有旧进程残留，但只是表象）。为绕开超时**手写了一个 websocket 直连 CDP 的脚本**（252 行），等于**架空项目工具**。
@@ -589,6 +600,7 @@
 - [ ] ECharts 中文类目轴 `interval: 0` → [B-61]
 - [ ] 聚合视图的上游截断值够不够 → [B-62]
 - [ ] 空态 / 部分失败 / 全失败 三种状态各有 UI → [B-67]
+- [ ] **隐藏容器里初始化的图表挂了 ResizeObserver 吗** → [B-67b]
 - [ ] 静态资源走本地 vendor → [B-63]
 - [ ] 同一文件多次修改**串行发** → [B-66]
 
@@ -614,4 +626,4 @@
 | `.workbuddy/memory/2026-09-10.md` | CDP 超时真根因（Job Object 回收 Chrome）+ 价格截断/口径（B-68~B-70） |
 | `~/.workbuddy/MEMORY.md` | 跨项目硬规则（对应本文档第 10 章 D-1~D-13） |
 
-**上次更新**：2026-09-10（Day9 + CDP 超时根因 / 价格截断修复，共 70 条）
+**上次更新**：2026-09-10（Day9 + CDP 超时根因 / 价格截断 / ECharts 隐藏视图塌陷，共 71 条）
