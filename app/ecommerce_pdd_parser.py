@@ -225,20 +225,29 @@ def extract_feature_tags(title: Optional[str]) -> tuple[str, ...]:
 
 
 def _price_to_yuan(goods: dict) -> Optional[int]:
-    """价格 -> 整数元.
+    """价格 -> 元 (四舍五入到整元).
 
-    优先 ``priceInfo`` (券后显示价字符串, 如 "1.88"); 没有再用 ``price`` (分).
-    解析不出或为空返回 ``None``.
+    优先 ``priceInfo`` (券后显示价字符串, 如 "74.6" / "1.88"): 这是页面上
+    **用户实际看到**的价格, 语义最准。没有再用 ``price`` (整数分, 原价口径)。
+
+    历史 bug (2026-09-10 修): 旧实现 ``int(float(pinfo))`` 对小数**截断**,
+    "124.99" -> 124, "1.88" -> 1, "60.16" -> 60 —— 这就是"价格不明细"的来源。
+    改成 ``round()`` 后 "1.88" -> 2, 虽然整数元仍丢小数, 但至少不做单向截断。
+
+    注意 ``priceInfo`` 与 ``price`` 可能**不一致** (如 priceInfo="50.4" vs
+    price=5960 分 =59.6 元), 前者是券后价、后者是原价, 不可互换。
+    本函数固定取 ``priceInfo`` 优先, 回退 ``price`` 时用 round 而非截断。
     """
     pinfo = (goods.get("priceInfo") or "").strip()
     if pinfo and pinfo not in {"0", "0.0", "0.00"}:
         try:
-            return int(float(pinfo))
+            return int(round(float(pinfo)))
         except ValueError:
             pass
     price = goods.get("price")
     if isinstance(price, (int, float)) and price:
-        return int(price) // 100
+        # price 单位是分, 转元四舍五入
+        return int(round(price / 100))
     return None
 
 
@@ -311,6 +320,19 @@ class GoodsDetail:
     single_sales: Optional[int]   # 单品销量 (热销N件)
     comment_count: Optional[int]  # 评论数 (商品评价(N))
 
+    # --- 结构化来源 (window.rawData) 的附加字段; 正则路径拿不到时为 None ---
+    #: 销量数据来自哪里: "json" = window.rawData 结构化字段 (可信);
+    #: "text" = 正文正则 (可能误抓品牌累计, 见下); None = 没拿到
+    sales_source: Optional[str] = None
+    #: 单品销量原文 (如 "已拼5391件"), 便于排查/展示
+    single_sales_text: Optional[str] = None
+    #: 店铺/品牌累计销量 (纯数值, 来自 mall.mallSales)
+    shop_sales: Optional[int] = None
+    #: 品牌累计销量 (纯数值, 来自 oakData.burialPointInfo.brandSales)
+    brand_sales: Optional[int] = None
+    #: 商品是否「APP专享」(网页端隐藏价格/销量) —— 结构化标记, 比正文匹配可靠
+    app_client_only: Optional[bool] = None
+
 
 def _extract_shop_name(text: str) -> Optional[str]:
     """从详情页正文提取店铺名 ("进店逛逛"上方第一行非销量/标签文本)."""
@@ -327,16 +349,108 @@ def _extract_shop_name(text: str) -> Optional[str]:
     return None
 
 
+def extract_goods_detail_from_json(raw: dict) -> Optional[GoodsDetail]:
+    """从 ``window.rawData`` 结构化数据提取详情页字段 —— **首选路径**.
+
+    为什么需要它
+    ------------
+    正文正则 ``(?:热销|已抢|总售)\\s*([\\d.]+万?)\\+?\\s*件`` 有个致命歧义:
+    详情页正文里**同时**存在单品销量 ("已拼5391件") 和品牌累计数
+    ("热销148.2万+"), 正则若先命中品牌那个, 就会把 148.2万 当成单品销量。
+    这正是 "OPPO 销量 1707万" 荒谬数字的来源之一。
+
+    ``window.rawData.store.initDataObj`` 里字段是**语义明确**的 (2026-09-10 实测
+    真实商品页 978586813372 解出)::
+
+        goods.sideSalesTip            = "已拼5391件"          # ✅ 单品销量
+        goods.sales_tip / salesTip    = "已拼5391件"          # ✅ 单品销量 (冗余)
+        goods.appClientOnly           = 0                     # APP专享标记
+        goods.minGroupPrice           = 98.9
+        mall.mallSales                = 128000                # 店铺累计 (纯数值)
+        mall.salesTipV2               = "本店已拼12.8万+件"    # 店铺累计
+        oakData.sectionList[*].data.burialPointInfo.brandSales = 1482182  # 品牌累计 (纯数值)
+
+    取单品销量优先级: ``sideSalesTip`` → ``sales_tip`` → ``salesTip``。
+    三条都是"单品"语义, 互为冗余 (页面不同版本/埋点各存一份)。
+
+    解析不到关键节点返回 ``None`` (让调用方回退正则路径)。
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        init = raw["store"]["initDataObj"]
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(init, dict):
+        return None
+
+    goods = init.get("goods") if isinstance(init.get("goods"), dict) else {}
+    mall = init.get("mall") if isinstance(init.get("mall"), dict) else {}
+
+    # --- 单品销量: 三个冗余字段, 按可信度取第一个能解析出数的 ---
+    single_sales: Optional[int] = None
+    single_text: Optional[str] = None
+    for key in ("sideSalesTip", "sales_tip", "salesTip"):
+        v = goods.get(key)
+        if isinstance(v, str) and v.strip():
+            parsed = parse_sales_tip(v)
+            if parsed is not None:
+                single_sales = parsed
+                single_text = v.strip()
+                break
+
+    # --- 店铺累计 / 品牌累计: 纯数值字段 (不需要解析中文) ---
+    shop_sales = mall.get("mallSales") if isinstance(mall.get("mallSales"), int) else None
+    brand_sales: Optional[int] = None
+    sections = (init.get("oakData") or {}).get("sectionList") if isinstance(init.get("oakData"), dict) else None
+    if isinstance(sections, list):
+        for sec in sections:
+            bp = (sec or {}).get("data", {}).get("burialPointInfo") if isinstance(sec, dict) else None
+            if isinstance(bp, dict) and isinstance(bp.get("brandSales"), int):
+                brand_sales = bp["brandSales"]
+                break
+
+    # --- APP专享标记 ---
+    app_only: Optional[bool] = None
+    if "appClientOnly" in goods:
+        app_only = bool(goods.get("appClientOnly"))
+
+    shop_name = mall.get("mallName") if isinstance(mall.get("mallName"), str) else None
+
+    # 一个有效字段都没有 → 判定为"没解析出", 交给调用方回退
+    if single_sales is None and shop_sales is None and shop_name is None:
+        return None
+
+    return GoodsDetail(
+        shop_name=shop_name,
+        single_sales=single_sales,
+        comment_count=None,  # 评论数在 rawData 里没有可靠位置, 保留给正文正则
+        sales_source="json",
+        single_sales_text=single_text,
+        shop_sales=shop_sales,
+        brand_sales=brand_sales,
+        app_client_only=app_only,
+    )
+
+
 def extract_goods_detail(text: str) -> GoodsDetail:
     """详情页可见正文 -> :class:`GoodsDetail` (店铺名/单品销量/评论数).
+
+    .. note::
+        **已不推荐**用于单品销量 —— 正文正则会把品牌累计数 ("热销148.2万+")
+        误当单品销量 ("已拼5391件")。优先用 :func:`extract_goods_detail_from_json`,
+        只在 rawData 不可用时回退到这里。此时 ``sales_source="text"`` 提醒下游
+        这个数是正则猜的。
 
     拿不到评分 (星级数字详情页不展示), 评论数作为热度替代.
     字段抓不到就 ``None``, 不抛错.
     """
     single_sales: Optional[int] = None
+    single_text: Optional[str] = None
     m = _DETAIL_SALES_RE.search(text)
     if m:
         single_sales = parse_sales_tip(m.group(1))
+        single_text = m.group(0)
 
     comment_count: Optional[int] = None
     m = _DETAIL_COMMENT_RE.search(text)
@@ -347,6 +461,50 @@ def extract_goods_detail(text: str) -> GoodsDetail:
         shop_name=_extract_shop_name(text),
         single_sales=single_sales,
         comment_count=comment_count,
+        sales_source="text" if single_sales is not None else None,
+        single_sales_text=single_text,
+    )
+
+
+def extract_goods_detail_best(html: str, text: str = "") -> GoodsDetail:
+    """详情页字段提取 —— **首选结构化, 回退正则** 的统一入口.
+
+    - 先 ``window.rawData`` 结构化解析 (单品销量语义明确)
+    - 结构化拿不到单品销量时, 用正文正则补齐 (评论数 / 店铺名), 但标
+      ``sales_source="text"`` 让下游知道来源弱
+    - 两者都没拿到 → 返回空 ``GoodsDetail`` (全 None)
+    """
+    raw = extract_raw_data(html) if html else None
+    jd = extract_goods_detail_from_json(raw) if raw else None
+    td = extract_goods_detail(text) if text else GoodsDetail(None, None, None)
+
+    if jd is None:
+        return td
+
+    # 结构化数据里没有评论数 → 从正文补
+    comment = jd.comment_count if jd.comment_count is not None else td.comment_count
+    # 结构化没给出单品销量 → 退正则的数 (并标 text 来源)
+    if jd.single_sales is None and td.single_sales is not None:
+        return GoodsDetail(
+            shop_name=jd.shop_name or td.shop_name,
+            single_sales=td.single_sales,
+            comment_count=comment,
+            sales_source="text",
+            single_sales_text=td.single_sales_text,
+            shop_sales=jd.shop_sales,
+            brand_sales=jd.brand_sales,
+            app_client_only=jd.app_client_only,
+        )
+
+    return GoodsDetail(
+        shop_name=jd.shop_name or td.shop_name,
+        single_sales=jd.single_sales,
+        comment_count=comment,
+        sales_source=jd.sales_source,
+        single_sales_text=jd.single_sales_text,
+        shop_sales=jd.shop_sales,
+        brand_sales=jd.brand_sales,
+        app_client_only=jd.app_client_only,
     )
 
 
@@ -358,4 +516,6 @@ __all__ = [
     "extract_competitors",
     "GoodsDetail",
     "extract_goods_detail",
+    "extract_goods_detail_from_json",
+    "extract_goods_detail_best",
 ]
