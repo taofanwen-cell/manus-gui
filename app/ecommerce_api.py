@@ -34,6 +34,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.ecommerce_analyzer import AnalysisPreference, analyze
+from app.ecommerce_browser_ctl import (
+    BrowserController,
+    SubprocessBrowserController,
+)
 from app.ecommerce_detail_store import load_detail_merged
 from app.ecommerce_scan import (
     STATUS_RUNNING,
@@ -248,6 +252,28 @@ class ScanResponse(BaseModel):
     keywords: list[str]
     #: 提示语: 多久回来查状态
     hint: str = "轮询 GET /api/scan/status 查看进度"
+
+
+class BrowserEnsureResponse(BaseModel):
+    """``POST /api/browser/ensure`` 响应 — 浏览器是否已就绪."""
+
+    ready: bool
+    #: 这次调用**是否真的启动了** Chrome (False = 本来就在跑, 幂等命中)
+    launched: bool
+    msg: str
+    how_to_fix: str = ""
+
+
+class BrowserLoginStatusResponse(BaseModel):
+    """``GET /api/browser/login-status`` 响应 (恒 200, 可高频轮询)."""
+
+    cdp_ready: bool
+    logged_in: bool
+    #: ``"cookie"`` 按 cookie 判 / ``"none"`` CDP 都没起 / ``"unknown"`` 探测异常
+    method: str
+    #: 实测读到的 PDD cookie **名**(不是值) —— 用来把登录 cookie 名钉成事实
+    cookie_names: list[str] = Field(default_factory=list)
+    msg: str = ""
 
 
 class CacheStatusResponse(BaseModel):
@@ -473,12 +499,14 @@ def create_app(
     detail_dir: Path | None = None,
     cache_dir: Path | None = None,
     scanner: Scanner | None = None,
+    browser_ctl: BrowserController | None = None,
 ) -> FastAPI:
     """FastAPI 工厂. ``html_source`` / ``insight_gen`` 都可注入, 便于测试.
 
     ``detail_dir``: 详情页字段目录, 给了就让销量优先用**单品销量**。
     默认从 ``FileHTMLSource.data_dir`` 推断 (即 ``data/``)。
     ``cache_dir``: 缓存清单目录 (``GET /api/cache-status`` 读的), 同样默认随 ``data/``。
+    ``scanner`` / ``browser_ctl``: 扫描任务管理 / 浏览器控制, 都可注入 Stub → CI 零 Chrome。
     """
     if html_source is None:
         # data/ 相对项目根; FastAPI 启动时 cwd 就是项目根
@@ -494,6 +522,11 @@ def create_app(
     if scanner is None:
         # 生产: 真 Popen 扫描脚本。测试注入 StubScanner → CI 零 CDP 依赖。
         scanner = SubprocessScanner(cdp_url=os.getenv("PDD_CDP_URL", "http://127.0.0.1:9223"))
+    if browser_ctl is None:
+        # 生产: 真探 CDP / 真 Popen 启动脚本。测试注入 StubBrowserController → CI 零 Chrome。
+        browser_ctl = SubprocessBrowserController(
+            cdp_url=os.getenv("PDD_CDP_URL", "http://127.0.0.1:9223")
+        )
 
     app = FastAPI(
         title="拼多多竞品调研 API",
@@ -527,6 +560,7 @@ def create_app(
     _detail_dir = detail_dir
     _cache_dir = cache_dir
     _scanner = scanner
+    _browser_ctl = browser_ctl
 
     @app.get("/api/health")
     def health() -> dict:
@@ -588,6 +622,44 @@ def create_app(
         不是"这个品牌真没商品", 前端要把这个区别说清楚。
         """
         return _scanner.snapshot().to_dict()
+
+    # -------------------------------------------------------------------
+    # 浏览器就绪 + 登录闸门: 前端「一键扫描」的前置两阶段
+    # -------------------------------------------------------------------
+
+    @app.post("/api/browser/ensure", response_model=BrowserEnsureResponse)
+    def browser_ensure() -> BrowserEnsureResponse:
+        """保证本机 CDP Chrome 就绪 (**幂等**).
+
+        - 已经在跑 → 直接 ready, 绝不重复启动
+        - 没跑 → 拉起 ``scripts/start_pdd_cdp_chrome.ps1`` 并等端口就绪
+        - 起不来 → 503 + ``how_to_fix`` (沿用 ``POST /api/scan`` 的错误契约)
+
+        注意: 这里**只拉起浏览器**, 不碰账号 —— 登录由人在窗口里完成 (只读红线 #11)。
+        """
+        res = _browser_ctl.ensure()
+        if not res.ready:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "BROWSER_UNAVAILABLE",
+                    "msg": res.msg,
+                    "how_to_fix": res.how_to_fix,
+                },
+            )
+        return BrowserEnsureResponse(**res.to_dict())
+
+    @app.get("/api/browser/login-status", response_model=BrowserLoginStatusResponse)
+    def browser_login_status() -> BrowserLoginStatusResponse:
+        """登录态探测 —— 读 cookie 的名字, 不导航、不点击 (轻且不触发风控).
+
+        恒 200 (与 ``/api/scan/status`` 一致), 前端可放心高频轮询。
+
+        **未登录不等于不能爬**: 前端拿到 ``logged_in=false`` 时必须同时给出两个出口
+        —— "去 Chrome 窗口登录" 和 "我已登录, 开始爬" (双保险)。自动探测只是加速器,
+        人工确认才是保证: PDD 风控可能"有 cookie 也返回登录页", 纯自动判定会误判。
+        """
+        return BrowserLoginStatusResponse(**_browser_ctl.check_login().to_dict())
 
     @app.post("/api/competitor-report", response_model=CompetitorReportResponse)
     def competitor_report(req: CompetitorReportRequest) -> CompetitorReportResponse:
