@@ -35,6 +35,7 @@ from app.ecommerce_analyzer import AnalysisPreference, analyze  # noqa: E402
 from app.ecommerce_detail_store import load_detail_merged  # noqa: E402
 from app.ecommerce_pdd_parser import extract_competitors  # noqa: E402
 from app.ecommerce_url_query import SearchParams, build_search_url  # noqa: E402
+from app.ecommerce_browser_ctl import CDP_CONNECT_TIMEOUT_MS  # noqa: E402
 
 CDP_URL_ENV = "PDD_CDP_URL"
 DEFAULT_CDP = "http://127.0.0.1:9223"

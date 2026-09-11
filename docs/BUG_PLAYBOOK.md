@@ -38,7 +38,7 @@
 | 手搓的 mock 数据源行为跟真的不一样 | B-29 |
 | 改 executor 一步，所有测试同时挂 | B-25 |
 | 断言"应该含 X"结果不成立 | B-23 |
-| `py_compile` 过了但运行时 NameError | B-03 / B-66 |
+| `py_compile` 过了但运行时 NameError（scripts/ 无测试覆盖更危险） | B-03 / B-66 / B-77 |
 | 同一文件并行改两处，一处被覆盖 | B-66 |
 | 子进程卡死不返回 | B-39 |
 | 后台脚本跑了很久最后没输出 | B-40 |
@@ -572,15 +572,24 @@
 - **根因**：`check_login` 调 `p.chromium.connect_over_cdp(self.cdp_url)` **没有传 `timeout`**（B-68 量过握手 0.12s，但那是健康态；卡死态无界）。`_probe_cdp` 有 3s 上限，真 attach 却没设。
 - **修法**：新增常量 `CDP_CONNECT_TIMEOUT_MS = 5000`（与脚本里 `urlopen(timeout=5)` 口径一致），`connect_over_cdp(self.cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS)`。Playwright 的 `timeout` 单位是**毫秒**。
 - **测试**：`test_ecommerce_browser_ctl.py::test_check_login_passes_connect_timeout` 用 fake 替换 `playwright.sync_api.sync_playwright`（零 Chrome 启动），断言 capture 到 `timeout == CDP_CONNECT_TIMEOUT_MS`。
-- **判断规则**：**任何 attach/connect 真实浏览器的调用都必须带显式 `timeout`**，否则单点卡死会拖垮整个轮询端点。`scripts/ecommerce_brand_compare.py`（`/api/scan` 真调用的脚本）的 `connect_over_cdp` 也已补 `timeout=CDP_CONNECT_TIMEOUT_MS=10_000`。
+- **判断规则**：**任何 attach/connect 真实浏览器的调用都必须带显式 `timeout`**，否则单点卡死会拖垮整个轮询端点。`scripts/ecommerce_brand_compare.py`（`/api/scan` 真调用的脚本）的 `connect_over_cdp` 此前声称补了 `timeout=CDP_CONNECT_TIMEOUT_MS=10_000`，但**常量根本没定义**（edit 未落盘），实测 `NameError`；现已改从 `app.ecommerce_browser_ctl` import 该常量（值 **5000**，与 API 层一致），见 B-77。
 
 ### B-76 脚本侧复发：`scripts/` 里同样的单判据排序 + 无 timeout connect ★
 - **症状**：验收点 B 收尾时只修了 `app/` 里的 `FileHTMLSource.fetch`（B-74）和 `check_login`（B-75），`scripts/` 里同款隐患没动——这是 B-74/B-75 的**第三处复发**。
 - **根因**：B-74/B-75 的"判断规则"要求 grep 全仓单判据漏网之鱼，但当时按"非 Web UI 热路径"划掉了脚本，没一并修。
 - **修法（同笔小提交）**：
   - 3 处单判据 `st_mtime` 排序 → 双判据 `(mtime, name)`：`scripts/pdd_detail_enrich.py:_find_latest_list_html`、`scripts/ecommerce_competitor_report.py:_find_latest_raw`、`scripts/ecommerce_brand_compare_html.py:_find_latest`。
-  - `scripts/ecommerce_brand_compare.py` 的 `connect_over_cdp(cdp_url)` → `connect_over_cdp(cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS)`（新增常量 `10_000` ms）—— 这是 `/api/scan` 真正起子进程调用的脚本，卡死会让前端永远转圈。
-- **判断规则**：**修 `app/` 的同款 bug 时，先 grep 全仓确认 `scripts/` 是否也有同样写法再定 scope**。本次只给 `/api/scan` 热路径的 `ecommerce_brand_compare.py` 补了 timeout；另两处脚本 connect（`pdd_cdp_extract.py:122` / `pdd_detail_enrich.py:142`）属手工一次性跑、风险低，按用户 scope 暂不动，留待后续。grep `key=lambda p: p.stat().st_mtime` 找所有单判据排序、grep `connect_over_cdp` 找所有 attach 点。
+  - `scripts/ecommerce_brand_compare.py` 的 `connect_over_cdp(cdp_url)` → `connect_over_cdp(cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS)`（**从 `app.ecommerce_browser_ctl` import，值 5000**，与 API 层一致；此前声称"新增常量 10_000"但 edit 未落盘，实为 `NameError`，见 B-77）—— 这是 `/api/scan` 真正起子进程调用的脚本，卡死会让前端永远转圈。
+- **判断规则**：**修 `app/` 的同款 bug 时，先 grep 全仓确认 `scripts/` 是否也有同样写法再定 scope**。本次只动了 `/api/scan` 热路径的 `ecommerce_brand_compare.py` 的 timeout（实际是补全 import，纠正之前的 `NameError`）；另两处脚本 connect（`pdd_cdp_extract.py:122` / `pdd_detail_enrich.py:142`）属手工一次性跑、风险低，按用户 scope 暂不动，留待后续。grep `key=lambda p: p.stat().st_mtime` 找所有单判据排序、grep `connect_over_cdp` 找所有 attach 点。
+
+### B-77 `py_compile` 只查语法不查名字 → 无测试覆盖的 `scripts/` 漏出 NameError ★
+- **症状**：CI 全绿，但 `/api/scan` 真机一跑就 `NameError: name 'CDP_CONNECT_TIMEOUT_MS' is not defined`，扫描功能整段坏掉。
+- **根因**：`scripts/ecommerce_brand_compare.py:289` 的 `connect_over_cdp(cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS)` 引用了一个**既没定义也没 import** 的常量（上一轮想加模块常量，但 edit 没落盘，与 B-66 的"假成功"同源）。而 CI **只跑 `tests/test_ecommerce_*.py`**，根本不 import `scripts/`；`py_compile` 又只查语法、不查未定义名 —— "语法通过 ≠ 代码能跑"，于是假绿。
+- **修法**：
+  1. 真 bug：`scripts/ecommerce_brand_compare.py` import 块补 `from app.ecommerce_browser_ctl import CDP_CONNECT_TIMEOUT_MS`（值 **5000**，与 API 层 `check_login` 一致），不在脚本里另搞 10_000。
+  2. 护栏：CI 新增 `ruff check --select F821 --isolated app scripts` 步骤。`F821` = 未定义名（NameError 隐患），直接兜住这次的坑；`scripts/` 没有测试覆盖，静态检查就是它唯一的兜底。
+- **验证**：`ruff check --select F821 --isolated app scripts` 在修之前报 **1 个错**（即本 bug），修之后 **0 错误**；`app/` 与 `scripts/` 其它地方无存量 F821。
+- **判断规则（本次判据）**：**"只过了 `py_compile` / 只 import 成功" 不算验证过**。`scripts/` 这种没有测试覆盖的代码，每次改完必须补一次**真实执行**或**静态未定义名检查**（ruff F821 / pyflakes）。凡是"CI 不碰、又没单测"的目录，必须有静态检查兜底，别让 `py_compile` 的绿当安全信号。→ [D-18]
 
 ---
 
@@ -605,6 +614,7 @@
 | D-15 | **修完真 bug 就往本文档追加一条** | 同一个坑踩第二次 |
 | D-16 | **"给人看的窗口" ≠ "给程序判定的输入"** | 成功行掉出尾部 20 行 → 扫成功被判成失败（B-71） |
 | D-17 | **同源服务的 CORS `*` 是可删的暴露面** | 无谓放行任意来源（B-73） |
+| D-18 | **无测试覆盖的目录必须有静态检查兜底** | `py_compile` 绿 ≠ 能跑，scripts/ 漏出 NameError 假绿（B-77） |
 
 ---
 
@@ -687,4 +697,4 @@
 | `.workbuddy/memory/2026-09-10.md` | CDP 超时真根因（Job Object 回收 Chrome）+ 价格截断/口径（B-68~B-70） |
 | `~/.workbuddy/MEMORY.md` | 跨项目硬规则（对应本文档第 10 章 D-1~D-13） |
 
-**上次更新**：2026-09-11（Day10 验收点 A/B：浏览器控制层 + 登录闸门 + 扫描状态反解修复 + CORS 收紧，共 74 条）
+**上次更新**：2026-09-11（补 B-77：scripts/ 无测试覆盖 → 加 ruff F821 静态检查兜底；并订正 B-75/B-76 中关于脚本 `connect_over_cdp` timeout 的错误记载——实际值取 app 层 5000、此前常量根本未定义是 NameError，非 10_000）
