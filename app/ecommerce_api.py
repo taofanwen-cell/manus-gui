@@ -491,6 +491,17 @@ def build_cache_status(data_dir: Path) -> CacheStatusResponse:
 # App Factory
 # ---------------------------------------------------------------------------
 
+#: 允许的跨域来源 —— 只放本机回环, 且只放本服务自己的地址。
+#:
+#: 前端 (``static/index.html``) 用**相对路径** ``fetch('/api/...')`` 调后端, 页面也
+#: 由本服务 ``/`` 提供, 因此**永远同源**, 正常流程根本不触发 CORS。这份白名单是
+#: 纵深防御: 万一页面被别的来源加载, 或有人拿 curl/脚本从外部页面打 API, 浏览器
+#: 会拦住。**本服务只绑 127.0.0.1, 不要对外暴露, 也不要加宽这个列表。**
+ALLOWED_ORIGINS: tuple[str, ...] = (
+    "http://127.0.0.1:8001",
+    "http://localhost:8001",
+)
+
 
 def create_app(
     *,
@@ -536,10 +547,10 @@ def create_app(
             "默认离线读 data/ 下的 HTML 扫描结果, 不发起网络请求。"
         ),
     )
-    # CORS: 让 static/index.html 用 file:// 打开也能调 API
+    # CORS: 前端同源直发本不经 CORS, 这里只放本机回环来源作纵深防御 (见 ALLOWED_ORIGINS)。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=list(ALLOWED_ORIGINS),
         allow_methods=["*"],
         allow_headers=["*"],
     )

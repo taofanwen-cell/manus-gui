@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.ecommerce_api import (
+    ALLOWED_ORIGINS,
     CompetitorReportRequest,
     FileHTMLSource,
     HTMLSource,
@@ -324,3 +325,64 @@ class TestFileHTMLSource:
         src = FileHTMLSource(d)
         with pytest.raises(FileNotFoundError):
             src.fetch("完全不存在的品牌蓝牙耳机")
+
+
+# ---------------------------------------------------------------------------
+# CORS: 白名单必须**收紧**到本机回环, 不能是 "*"
+# ---------------------------------------------------------------------------
+
+
+class TestCORS:
+    """纵深防御断言 —— 本服务只绑回环, 跨域来源只放自己的两个地址。
+
+    正常流程前端同源直发, CORS 不参与; 这里的用例防的是**将来有人把白名单放宽**
+    (例如顺手改回 ``["*"]``) 造成无意识的暴露面扩大。
+    """
+
+    def test_allowed_origins_is_loopback_only(self):
+        """白名单不能是通配, 且每个来源都必须是本机回环。"""
+        assert "*" not in ALLOWED_ORIGINS
+        assert len(ALLOWED_ORIGINS) == 2
+        assert set(ALLOWED_ORIGINS) == {
+            "http://127.0.0.1:8001",
+            "http://localhost:8001",
+        }
+        for origin in ALLOWED_ORIGINS:
+            assert origin.startswith(("http://127.0.0.1:", "http://localhost:"))
+
+    def test_allowed_origin_echoed_back(self, client: TestClient):
+        r = client.get("/api/health", headers={"Origin": "http://127.0.0.1:8001"})
+        assert r.status_code == 200
+        assert r.headers.get("access-control-allow-origin") == "http://127.0.0.1:8001"
+
+    def test_localhost_alias_also_allowed(self, client: TestClient):
+        r = client.get("/api/health", headers={"Origin": "http://localhost:8001"})
+        assert r.headers.get("access-control-allow-origin") == "http://localhost:8001"
+
+    def test_foreign_origin_not_echoed(self, client: TestClient):
+        """外部来源不得拿到放行头 (收紧前 allow_origins=["*"] 会回显任意来源)。"""
+        r = client.get("/api/health", headers={"Origin": "http://evil.example.com"})
+        assert "access-control-allow-origin" not in r.headers
+
+    def test_preflight_from_foreign_origin_rejected(self, client: TestClient):
+        """预检请求: 外部来源不应拿到放行头。"""
+        r = client.options(
+            "/api/competitor-report",
+            headers={
+                "Origin": "http://evil.example.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert "access-control-allow-origin" not in r.headers
+
+    def test_preflight_from_allowed_origin_ok(self, client: TestClient):
+        r = client.options(
+            "/api/competitor-report",
+            headers={
+                "Origin": "http://127.0.0.1:8001",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert (
+            r.headers.get("access-control-allow-origin") == "http://127.0.0.1:8001"
+        )
