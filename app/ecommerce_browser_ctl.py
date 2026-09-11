@@ -77,6 +77,11 @@ MAX_COOKIE_NAMES_ECHOED = 50
 DEFAULT_LAUNCH_TIMEOUT_S = 30.0
 DEFAULT_POLL_INTERVAL_S = 1.0
 
+#: ``connect_over_cdp`` 的连接超时 (毫秒, 与 Playwright 其它 timeout 同单位).
+#: 本端点被前端 3s 轮询一次, 若 CDP 端口活着但浏览器卡死, 无界的 attach 会一直
+#: 占着 threadpool 线程 —— 用 5s 与 scripts 里的 ``urlopen(timeout=5)`` 口径一致.
+CDP_CONNECT_TIMEOUT_MS = 5000
+
 HOW_TO_FIX_MANUAL = (
     "确认已安装 Chrome; 或在**你自己的终端**里手动跑 "
     "scripts/start_pdd_cdp_chrome.ps1 后重试。"
@@ -283,7 +288,9 @@ class SubprocessBrowserController:
 
         try:
             with sync_playwright() as p:
-                browser = p.chromium.connect_over_cdp(self.cdp_url)
+                browser = p.chromium.connect_over_cdp(
+                    self.cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS
+                )
                 # 没有 context 就说明这个 Chrome 里根本没登录态, 不必新建一个空的
                 if not browser.contexts:
                     return LoginStatus(

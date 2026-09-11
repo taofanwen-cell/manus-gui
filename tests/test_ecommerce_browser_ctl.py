@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.ecommerce_api import create_app
 from app.ecommerce_browser_ctl import (
+    CDP_CONNECT_TIMEOUT_MS,
     DEFAULT_START_SCRIPT,
     LOGIN_COOKIE_CANDIDATES,
     MAX_COOKIE_NAMES_ECHOED,
@@ -153,6 +154,50 @@ def test_subprocess_ctl_has_no_io_at_construction():
     ctl = SubprocessBrowserController()
     assert ctl.start_script == DEFAULT_START_SCRIPT
     assert ctl._launch_proc is None
+
+
+def test_check_login_passes_connect_timeout(monkeypatch):
+    """回归 (B-75): attach 用户 Chrome 时必须给 ``connect_over_cdp`` 传 ``timeout``,
+    否则 CDP 端口活着但浏览器卡死时, 这个**同步**端点会无界占着 threadpool 线程
+    (前端每 3s 轮询一次 ``/api/browser/login-status``). 用 fake 替换 playwright, 零 Chrome 启动.
+    """
+    captured: dict = {}
+
+    class _FakeBrowser:
+        contexts: list = []  # 空 → check_login 直接报"无上下文", 不读 cookie
+
+    class _FakePlaywright:
+        def __init__(self, cap):
+            self._cap = cap
+
+        @property
+        def chromium(self):
+            return self
+
+        def connect_over_cdp(self, endpoint_url, **kwargs):
+            self._cap.update(kwargs)
+            return _FakeBrowser()
+
+    class _FakeSyncPlaywright:
+        def __init__(self, cap):
+            self._cap = cap
+
+        def __enter__(self):
+            return _FakePlaywright(self._cap)
+
+        def __exit__(self, *a):
+            return False
+
+    ctl = SubprocessBrowserController(cdp_url="http://127.0.0.1:9223")
+    monkeypatch.setattr(ctl, "probe", lambda: (True, ""))  # 跳过真实网络探测
+    import playwright.sync_api as _pw
+
+    monkeypatch.setattr(_pw, "sync_playwright", lambda: _FakeSyncPlaywright(captured))
+    st = ctl.check_login()
+    assert captured.get("timeout") == CDP_CONNECT_TIMEOUT_MS
+    # 空 contexts → 直接报未登录, 不读 cookie (红线: 不碰账号密码)
+    assert st.logged_in is False
+    assert st.cdp_ready is True
 
 
 # ---------------------------------------------------------------------------

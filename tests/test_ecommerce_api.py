@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -278,19 +279,40 @@ class TestBuildReportDirect:
 
 class TestFileHTMLSource:
     def test_picks_latest_by_mtime(self, tmp_path: Path):
-        # 写两个华为 HTML 文件, 第二个 mtime 更新, fetch("华为蓝牙耳机") 取最新那个
+        # 写两个华为 HTML 文件, 显式设置不同 mtime, fetch("华为蓝牙耳机") 取 mtime 最新那个
         d = tmp_path / "data"
         d.mkdir()
-        (d / "pdd_raw_华为_20260101T000000.html").write_text(_make_html("华为v1", 3), encoding="utf-8")
-        (d / "pdd_raw_华为_20260201T000000.html").write_text(_make_html("华为v2", 5), encoding="utf-8")
-        # touch 第二个让它 mtime 更新
-        (d / "pdd_raw_华为_20260201T000000.html").write_text(
-            _make_html("华为v2", 5), encoding="utf-8"
-        )
+        f_old = d / "pdd_raw_华为_20260101T000000.html"
+        f_new = d / "pdd_raw_华为_20260201T000000.html"
+        f_old.write_text(_make_html("华为v1", 3), encoding="utf-8")
+        f_new.write_text(_make_html("华为v2", 5), encoding="utf-8")
+        # 关键: 显式 utime, 不依赖 write_text 的隐式 mtime bump —— 在秒级精度的 CI
+        # 文件系统上两次 write 常落在同一时钟 tick, 会让排序退化为"文件夹顺序随机取".
+        base = 1_700_000_000.0
+        os.utime(f_old, (base, base))
+        os.utime(f_new, (base + 1000.0, base + 1000.0))
         src = FileHTMLSource(d)
         html = src.fetch("华为蓝牙耳机")
         assert "华为v2" in html  # mtime 最新的那个
         assert "goodsID" in html
+
+    def test_mtime_tie_falls_back_to_filename(self, tmp_path: Path):
+        """核心回归: 两个文件 mtime 完全相同 (连续两次扫描同秒落盘) 时,
+        必须按文件名里的 YYYYmmddTHHMMSS 取较新的那份, 不能按 glob 文件夹顺序随机取.
+        """
+        d = tmp_path / "data"
+        d.mkdir()
+        f_old = d / "pdd_raw_华为_20260101T000000.html"
+        f_new = d / "pdd_raw_华为_20260201T000000.html"
+        f_old.write_text(_make_html("华为v1", 3), encoding="utf-8")
+        f_new.write_text(_make_html("华为v2", 5), encoding="utf-8")
+        # 强制 mtime 完全相同 —— 直接复现 bug 现场 (时间打平)
+        same = 1_700_000_000.0
+        os.utime(f_old, (same, same))
+        os.utime(f_new, (same, same))
+        src = FileHTMLSource(d)
+        html = src.fetch("华为蓝牙耳机")
+        assert "华为v2" in html  # 文件名较新的那份 (即便 mtime 打平)
 
     def test_detect_brand_from_keyword_suffix(self, tmp_path: Path):
         """关键回归: keyword='华为蓝牙耳机' 必须推出 brand='华为', 不再返回所有 glob 第一份."""

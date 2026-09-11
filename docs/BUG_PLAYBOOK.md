@@ -30,6 +30,8 @@
 | 前端显示 `—`、冠军机型名为空 | B-34 / B-35 |
 | 布尔参数语义反了（填 True 反而保留） | B-05 |
 | 同秒写入的文件 `max(mtime)` 结果随机 | B-30 |
+| `fetch`/取最新文件只按 mtime 排，时间打平取到旧文件 | B-74 (B-30 第三处) |
+| `connect_over_cdp` 没传 `timeout`、无界卡住拖垮轮询端点 | B-75 (B-68) |
 | 测试有时过有时挂（flaky） | B-30 / B-31 |
 | 自己写的 fake 缺字段导致测试挂 | B-28 |
 | 手搓的 mock 数据源行为跟真的不一样 | B-29 |
@@ -274,6 +276,7 @@
 - **根因**：同一秒内写入多个文件，`st_mtime` 相同，`max()` 返回哪个不确定。
 - **修法**：双判据 `max(files, key=lambda p: (p.stat().st_mtime, p.name))` —— 文件名里的 `YYYYmmddTHHMMSS` 作稳定第二判据。
   - **同一个坑在两处同时出现**：`ecommerce_detail_store.find_latest_detail_file` 和 `build_cache_status`。修要一起修。
+  - **第三处漏网之鱼**（2026-09-11 验收才抓到）：`app/ecommerce_api.py::FileHTMLSource.fetch` 也是单判据 `st_mtime` → 见 B-74。grep `key=lambda p: p.stat().st_mtime` 找漏网。
 - **判断规则**：**任何"取最新文件/记录"的排序，单靠时间戳都不稳**。加一个单调的第二判据（文件名 / ID / 序号）。
 
 ### B-31 测试挂了先精确定位，别只看尾巴
@@ -555,6 +558,20 @@
 - **根因**：前端 `static/index.html` 用**相对路径** `fetch('/api/...')`，页面也由同一服务 `/` 提供 → **永远同源，正常流程根本不触发 CORS**。此时 `["*"]` 不带来任何功能收益，只扩大了暴露面。注释里写的"让 `file://` 打开也能调 API"是**过时理由**（该用法已不再支持）。
 - **修法**：白名单收紧到本服务自己的回环地址（`http://127.0.0.1:8001` / `http://localhost:8001`），并在注释里写清"**不要加宽这个列表**"。补 6 条断言（非通配 / 全为回环 / 放行来源回显 / 外部来源不回显 / 外部预检拒绝 / 放行预检通过）。
 - **判断规则**：**CORS 白名单是纵深防御，不是功能开关**。凡是"前后端同源"的服务，`*` 都应被视为可删的暴露面；收紧前先确认前端调用方式（相对路径 vs 绝对 URL）。
+
+### B-74 `FileHTMLSource.fetch` 漏了 `(mtime, name)` 双判据 ★
+- **症状**：2026-09-11 验收发现——`fetch()` 取最新 HTML 只按 `st_mtime` 排，时间打平时按 glob 文件夹顺序**随机取**，实测取到旧文件。
+- **根因**：B-30 的坑在 `find_latest_detail_file` 和 `build_cache_status` 两处都修过，唯独 `app/ecommerce_api.py` 的 `FileHTMLSource.fetch()` 漏了，排序键还是 `key=lambda p: p.stat().st_mtime`（单判据）。
+- **修法**：排序键改成 `key=lambda p: (p.stat().st_mtime, p.name)`（与另外两处一致）。
+- **测试**：`test_ecommerce_api.py::TestFileHTMLSource::test_picks_latest_by_mtime` 改成**确定性写法**（`os.utime` 显式设不同 mtime，不依赖 `write_text` 的隐式 bump——CI 秒级文件系统下两次 write 可能同 tick）；新增 `test_mtime_tie_falls_back_to_filename` 直接复现"mtime 完全相同 → 按文件名取较新那份"。
+- **判断规则**：**B-30 的坑每新增一处"取最新文件"的排序都要一起查**。grep `sorted(...)st_mtime` / `key=lambda p: p.stat()` 找单判据漏网之鱼。
+
+### B-75 `check_login` 的 `connect_over_cdp` 没传 `timeout` → 无界卡线程 ★
+- **症状**：`GET /api/browser/login-status` 被前端每 3s 轮询一次；CDP 端口活着但浏览器卡死时，`check_login` 里的 attach 会一直占着 threadpool 线程。
+- **根因**：`check_login` 调 `p.chromium.connect_over_cdp(self.cdp_url)` **没有传 `timeout`**（B-68 量过握手 0.12s，但那是健康态；卡死态无界）。`_probe_cdp` 有 3s 上限，真 attach 却没设。
+- **修法**：新增常量 `CDP_CONNECT_TIMEOUT_MS = 5000`（与脚本里 `urlopen(timeout=5)` 口径一致），`connect_over_cdp(self.cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS)`。Playwright 的 `timeout` 单位是**毫秒**。
+- **测试**：`test_ecommerce_browser_ctl.py::test_check_login_passes_connect_timeout` 用 fake 替换 `playwright.sync_api.sync_playwright`（零 Chrome 启动），断言 capture 到 `timeout == CDP_CONNECT_TIMEOUT_MS`。
+- **判断规则**：**任何 attach/connect 真实浏览器的调用都必须带显式 `timeout`**，否则单点卡死会拖垮整个轮询端点。
 
 ---
 

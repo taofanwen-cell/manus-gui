@@ -5,7 +5,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> 基于 CDP 反爬 + FastAPI 服务化的多品牌拼多多蓝牙耳机竞品横向对比工具，含价格分档、卖点聚合、单品销量、详情页字段增强、可选 LLM 业务洞察、深色大屏 ECharts 前端，以及 **Web UI 输入任意关键词一键扫描出报告**。257 个单测零回归。
+> 基于 CDP 反爬 + FastAPI 服务化的多品牌拼多多蓝牙耳机竞品横向对比工具，含价格分档、卖点聚合、单品销量、详情页字段增强、可选 LLM 业务洞察、深色大屏 ECharts 前端，以及 **Web UI 输入任意关键词一键扫描出报告**。259 个单测零回归。
 
 ---
 
@@ -21,7 +21,7 @@
 | **Web 前端** | 单文件深色大屏 ECharts (4 视图), 离线可用, 零构建链 |
 | **一键扫描** | 输入任意品牌 → 幂等确保 CDP Chrome → **登录闸门** → 起子进程扫拼多多 → 2s 轮询进度 → 自动出报告 |
 | **失败要响** | CDP 不通 503 / 重复提交 409 / 脏关键词 422 / 无数据渲染空态卡片, 都带修复指引 |
-| **测试守护** | 257 个 pytest 用例, sandbox/CI 离线可跑 (不需真实 CDP / LLM key) |
+| **测试守护** | 259 个 pytest 用例, sandbox/CI 离线可跑 (不需真实 CDP / LLM key) |
 
 ---
 
@@ -196,7 +196,7 @@ curl http://127.0.0.1:8001/api/scan/status
 ```bash
 cd upstream/manus-gui
 ./.venv/Scripts/python.exe -m pytest -q tests/test_ecommerce_*.py
-# → 257 passed
+# → 259 passed
 ```
 
 涵盖 (CI 在 ubuntu + py3.11 上跑同一组命令):
@@ -245,7 +245,7 @@ upstream/manus-gui/
 │   ├── pdd_raw_<品牌>_<时间戳>.html
 │   ├── pdd_detail_enrich_<时间戳>.json
 │   └── ui_*.png                   # 前端截图
-├── tests/test_ecommerce_*.py      # 257 测试
+├── tests/test_ecommerce_*.py      # 259 测试
 ├── requirements-ecommerce.txt     # 最小依赖
 ├── docs/handoff/                  # 设计决策日志 (Day 1-9)
 └── docs/BUG_PLAYBOOK.md           # 74 条真实踩坑知识库 (症状可检索)
@@ -282,7 +282,7 @@ upstream/manus-gui/
 - `FileHTMLSource` 默认从 `data/` 读 HTML, 不发起网络请求
 - LLM 走 Stub, 不绑 API key
 - 扫描器走 Protocol 注入 (`create_app(scanner=StubScanner())`), CI 零 CDP 依赖
-- 测试 257 个零依赖外部资源, 已接 GitHub Actions CI
+- 测试 259 个零依赖外部资源, 已接 GitHub Actions CI
 
 ### 6. 扫描跑子进程而不是 in-process
 - 扫描脚本含 playwright/CDP 全局状态, 崩了会连累 API 进程 → `subprocess.Popen` 隔离

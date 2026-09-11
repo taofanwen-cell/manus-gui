@@ -101,9 +101,13 @@ class FileHTMLSource:
         brand = self._detect_brand(keyword)
         if brand is None:
             raise FileNotFoundError(f"无法从 keyword {keyword!r} 推出品牌名")
+        # 双判据 (mtime, 文件名): 只按 mtime 排时, 同秒写入的多个文件 (连续两次扫描 /
+        # 测试) 结果随机 —— 文件名里的 YYYYmmddTHHMMSS 正好作为稳定第二判据.
+        # 这一个坑在 find_detail_files / cache-status 里都已修过, 唯独这里漏了
+        # (2026-09-11 验收发现: 时间打平时按文件夹顺序随机取, 实测取到旧文件).
         candidates = sorted(
             self.data_dir.glob(f"pdd_raw_{brand}_*.html"),
-            key=lambda p: p.stat().st_mtime,
+            key=lambda p: (p.stat().st_mtime, p.name),
             reverse=True,
         )
         if not candidates:
