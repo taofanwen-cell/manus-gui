@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.ecommerce_api import create_app
 from app.ecommerce_scan import (
+    LOG_TAIL_LINES,
     STATUS_DONE,
     STATUS_IDLE,
     STATUS_RUNNING,
@@ -69,6 +70,74 @@ def test_parse_log_mixed_results():
     assert ok == ["华为"]
     assert [f["keyword"] for f in failed] == ["OPPO"]
     assert current == "OPPO"
+
+
+# ---------------------------------------------------------------------------
+# 回归: 成功行掉出尾部窗口 → snapshot() 必须仍认得出"扫成功"  (B-71)
+# ---------------------------------------------------------------------------
+
+
+class _FakeProc:
+    """够用的假子进程: snapshot() 只调 poll()."""
+
+    def __init__(self, rc: int | None):
+        self._rc = rc
+
+    def poll(self):
+        return self._rc
+
+
+def _scanner_with_log(tmp_path, body: list[str], keywords: list[str], rc):
+    log = tmp_path / "pdd_scan_fake.log"
+    log.write_text("\n".join(body) + "\n", encoding="utf-8")
+    s = SubprocessScanner()
+    s._log_path = log
+    s._keywords = list(keywords)
+    s._state = ScanState(status=STATUS_RUNNING, job_id="fake", keywords=list(keywords))
+    s._proc = _FakeProc(rc)
+    return s
+
+
+def test_snapshot_parses_success_line_outside_tail_window(tmp_path):
+    """真机回归 (2026-09-11): 脚本先打成功行, 再打几十行 Markdown 报告。
+
+    旧实现只把**尾部 20 行**喂给 ``_parse_log`` → 成功行被挤出去 → ``succeeded``
+    为空 → 前端显示"✗ 扫描失败"且不生成报告, 明明数据已落盘。这里钉死:
+    判定看全量, 展示才截尾。
+    """
+    body = [
+        "[scan] OPPO -> https://mobile.yangkeduo.com/search_result.html?search_key=OPPO",
+        "[scan] OPPO raw html -> pdd_raw_OPPO_20260911T123801.html (281258 chars)",
+        "[scan] OPPO: 样本 20 | 中位数 ¥310 | 区间 ¥157~¥728 | 销量=216000 (single)",
+    ]
+    body += [f"| 报告第 {i} 行 | 内容 |" for i in range(40)]  # 顶掉尾部窗口
+    st = _scanner_with_log(tmp_path, body, ["OPPO"], rc=0).snapshot()
+
+    assert st.status == STATUS_DONE
+    assert st.succeeded == ["OPPO"], "成功行掉出尾部窗口后仍必须被解析出来"
+    assert st.failed == []
+    # 展示仍然只给尾部 (不让前端拖一大坨)
+    assert len(st.log_tail) == LOG_TAIL_LINES
+    assert st.log_tail[-1] == "| 报告第 39 行 | 内容 |"
+
+
+def test_snapshot_backfills_silently_skipped_keyword(tmp_path):
+    """进程退出后, 既没成功行也没失败行的 keyword 必须补成 failed, 否则前端白等。"""
+    body = ["[scan] OPPO -> https://..."] + [f"line {i}" for i in range(30)]
+    st = _scanner_with_log(tmp_path, body, ["OPPO", "华为"], rc=0).snapshot()
+
+    assert st.succeeded == []
+    assert [f["keyword"] for f in st.failed] == ["OPPO", "华为"]
+
+
+def test_snapshot_running_does_not_backfill(tmp_path):
+    """还在跑的时候绝不能补 failed —— 那会把排队中的品牌误报成失败。"""
+    body = ["[scan] OPPO -> https://..."]
+    st = _scanner_with_log(tmp_path, body, ["OPPO", "华为"], rc=None).snapshot()
+
+    assert st.status == STATUS_RUNNING
+    assert st.failed == []
+    assert st.current == "OPPO"
 
 
 # ---------------------------------------------------------------------------

@@ -37,8 +37,14 @@ STATUS_RUNNING = "running"
 STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 
-#: 状态接口回传的日志尾部行数
+#: 状态接口回传的日志尾部行数 (**只影响展示**)
 LOG_TAIL_LINES = 20
+
+#: 状态判定要读多少行。**必须读全量**: 脚本先打 ``[scan] {kw}: 样本 N`` 成功行,
+#: 再打几十行 Markdown 报告 —— 成功行会掉出尾部 20 行窗口, 只解析尾部就会把
+#: "扫成功" 误判成 "什么都没发生"(前端据此显示"扫描失败"且不生成报告)。
+#: 这个上限只是防御极端情况 (单品牌 ~32 行, 实际远远够)。
+LOG_PARSE_LINES = 5000
 
 #: 单个 keyword 最大长度 (防注入垃圾 / 超长 URL)
 MAX_KEYWORD_LEN = 32
@@ -242,12 +248,13 @@ class SubprocessScanner:
         if self._proc is None:
             return ScanState()  # idle
 
-        lines = self._read_tail()
+        lines = self._read_parse_lines()      # 全量 (仅尾部上限), 用于状态判定
         succeeded, failed, current = _parse_log(lines, self._keywords)
         rc = self._proc.poll()
 
         st = self._state
-        st.log_tail = lines
+        # 展示只给尾部; 判定用上面那批全量行 —— 两者**不能共用同一个截断**
+        st.log_tail = lines[-LOG_TAIL_LINES:]
         st.succeeded = succeeded
         st.failed = failed
         st.current = current
@@ -259,18 +266,26 @@ class SubprocessScanner:
             st.finished_at = datetime.now().replace(microsecond=0).isoformat()
             st.status = STATUS_DONE if rc == 0 else STATUS_FAILED
             st.current = None
+            # 进程已退出: 既没成功行也没失败行的 keyword 是"被静默跳过"(比如 raw html
+            # 写失败), 必须补成 failed —— 否则前端会一直等一个永远不会出现的品牌。
+            done = set(succeeded) | {f["keyword"] for f in failed}
+            for kw in self._keywords:
+                if kw not in done:
+                    failed.append({"keyword": kw, "reason": "脚本未报告该关键词 (静默跳过)"})
             self._close_log()
         return st
 
-    def _read_tail(self) -> list[str]:
+    def _read_parse_lines(self) -> list[str]:
+        return self._read_lines()[-LOG_PARSE_LINES:]
+
+    def _read_lines(self) -> list[str]:
         if not self._log_path or not self._log_path.exists():
             return []
         try:
             text = self._log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return []
-        lines = [ln for ln in text.splitlines() if ln.strip()]
-        return lines[-LOG_TAIL_LINES:]
+        return [ln for ln in text.splitlines() if ln.strip()]
 
     def _close_log(self) -> None:
         try:

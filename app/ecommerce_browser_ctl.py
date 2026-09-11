@@ -50,14 +50,21 @@ DEFAULT_START_SCRIPT = ROOT / "scripts" / "start_pdd_cdp_chrome.ps1"
 #: 回环 CDP 白名单 (与 ecommerce_scan / pdd_detail_enrich 里的约束一致)
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
-#: 登录态 cookie 候选名。**注意**: 真实名字尚未在真机上验证过 —— 所以
-#: ``check_login`` 会额外把实际读到的 PDD cookie 名回显出来 (见 ``cookie_names``),
-#: 首次真机跑就能把这份候选表钉成事实, 不必靠猜。
+#: 登录态 cookie 候选名。
+#:
+#: **2026-09-11 真机实测确认**(不再是猜测): 已登录的 CDP Chrome 里稳定出现
+#: ``PDDAccessToken`` / ``pdd_user_id`` / ``pdd_user_uin`` 三个 —— 前两个 pdd_* 是
+#: 登录身份, ``PDDAccessToken`` 是访问令牌。``pdd_uid`` 保留为兼容别名, 暂未在实测
+#: 样本中出现。若日后 PDD 改名, ``check_login`` 会把**实际读到的** cookie 名回显到
+#: ``GET /api/browser/login-status``, 照着实测结果改这份表即可。
 LOGIN_COOKIE_CANDIDATES = (
-    "PASS_ID_TOKEN",
+    # —— 2026-09-11 真机实测命中的 (已登录的 CDP Chrome 里稳定出现) ——
+    "PDDAccessToken",
     "pdd_user_id",
     "pdd_user_uin",
+    # —— 兼容别名: 实测样本里未出现, 保留以防不同账号态/旧版命名 ——
     "pdd_uid",
+    "PASS_ID_TOKEN",
 )
 
 #: 回显 cookie 名时, 只挑 PDD 域的 (避免把整包 cookie 名吐给前端)

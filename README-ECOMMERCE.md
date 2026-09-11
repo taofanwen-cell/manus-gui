@@ -5,7 +5,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> 基于 CDP 反爬 + FastAPI 服务化的多品牌拼多多蓝牙耳机竞品横向对比工具，含价格分档、卖点聚合、单品销量、详情页字段增强、可选 LLM 业务洞察、深色大屏 ECharts 前端，以及 **Web UI 输入任意关键词一键扫描出报告**。212 个单测零回归。
+> 基于 CDP 反爬 + FastAPI 服务化的多品牌拼多多蓝牙耳机竞品横向对比工具，含价格分档、卖点聚合、单品销量、详情页字段增强、可选 LLM 业务洞察、深色大屏 ECharts 前端，以及 **Web UI 输入任意关键词一键扫描出报告**。257 个单测零回归。
 
 ---
 
@@ -19,9 +19,9 @@
 | **服务化** | FastAPI + Pydantic schema 收口 + CORS + 静态资源 mount |
 | **可选 LLM** | DashScope (OpenAI 兼容) + 网络失败自动降级 StubInsightGenerator |
 | **Web 前端** | 单文件深色大屏 ECharts (4 视图), 离线可用, 零构建链 |
-| **一键扫描** | 输入任意品牌 → `POST /api/scan` 起子进程扫拼多多 → 2s 轮询进度 → 自动出报告 |
+| **一键扫描** | 输入任意品牌 → 幂等确保 CDP Chrome → **登录闸门** → 起子进程扫拼多多 → 2s 轮询进度 → 自动出报告 |
 | **失败要响** | CDP 不通 503 / 重复提交 409 / 脏关键词 422 / 无数据渲染空态卡片, 都带修复指引 |
-| **测试守护** | 212 个 pytest 用例, sandbox/CI 离线可跑 (不需真实 CDP / LLM key) |
+| **测试守护** | 257 个 pytest 用例, sandbox/CI 离线可跑 (不需真实 CDP / LLM key) |
 
 ---
 
@@ -31,6 +31,14 @@
 
 - Python 3.11+ (项目在 `.venv/` 已装好)
 - 一个能登录拼多多 PC 版的 Chrome
+
+> **🔑 登录闸门（两阶段前置）**：点「📡 扫描并生成」后，后端会**幂等**地保证 CDP Chrome
+> 就绪（已在跑绝不重复起），再轮询登录态。没登录会显示「请在 Chrome 窗口登录拼多多」，
+> 同时给「✓ 我已登录，开始爬」和「✕ 取消」两个出口。
+>
+> **只读红线（硬约束）**：本工具只**自动起浏览器 + 读 cookie 名判断登录态**。
+> **登录凭证由人在 Chrome 窗口里手动填写，验证由人过** —— 代码里**绝不**自动填账号/密码/
+> 验证码，绝不注入或伪造 cookie，绝不绕过验证。它不是"无人值守采集器"。
 
 ### 1. 一键 demo (推荐)
 
@@ -114,6 +122,8 @@ $env:PDD_CDP_URL = 'http://127.0.0.1:9223'
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/brands` | 返回默认 6 品牌列表 |
 | GET | `/api/cache-status` | 列出 `data/` 里**已有缓存**的关键词 (按 keyword 去重取最新) + mtime/size/age |
+| POST | `/api/browser/ensure` | **幂等**保证 CDP Chrome 就绪: 已在跑直接用, 没跑才拉起 `start_pdd_cdp_chrome.ps1` 并等端口; 起不来 → 503 |
+| GET | `/api/browser/login-status` | 读 cookie **名**判断拼多多登录态 (恒 200, 可高频轮询; 永不回传 cookie 值) |
 | POST | `/api/scan` | **起子进程扫拼多多** (需要本机 CDP Chrome 已登录) |
 | GET | `/api/scan/status` | 轮询扫描进度: `idle` / `running` / `done` / `failed` + 日志尾 20 行 |
 | POST | `/api/competitor-report` | 主端点: 6 品牌横向对比 + 业务洞察 |
@@ -125,28 +135,43 @@ curl -X POST http://127.0.0.1:8001/api/competitor-report \
   -d '{"brands":["华为","小米","倍思","QCY","万魔","漫步者"],"top_n":20,"include_insights":true}'
 ```
 
-**扫描流程** (Web UI 的「📡 扫描并生成」就是调这两条):
+**扫描流程** (Web UI 的「📡 扫描并生成」按下后分三段走):
+
 ```bash
-# 1. 先看现有缓存, 避免白扫
+# 0. 前置: 保证浏览器就绪 (幂等 —— 已在跑不会重复起)
+curl -X POST http://127.0.0.1:8001/api/browser/ensure
+
+# 1. 登录闸门: 轮询登录态 (自动探测只是加速器, 人工确认才是保证)
+curl http://127.0.0.1:8001/api/browser/login-status
+#    logged_in=false → 前端显示「请在弹出的 Chrome 窗口登录拼多多」
+#                     + 「✓ 我已登录，开始爬」按钮 + 「✕ 取消」按钮, 每 3s 自动重探
+#    logged_in=true  → 自动放行 (前端会打一行「检测到登录态 → 开始扫描」日志)
+
+# 2. 先看现有缓存, 避免白扫
 curl http://127.0.0.1:8001/api/cache-status
 
-# 2. 触发扫描 (suffix 默认拼 '蓝牙耳机'; 关键词已含品类就传 "")
+# 3. 触发扫描 (suffix 默认拼 '蓝牙耳机'; 关键词已含品类就传 "")
 curl -X POST http://127.0.0.1:8001/api/scan \
   -H 'Content-Type: application/json' \
   -d '{"keywords":["OPPO"],"suffix":"蓝牙耳机"}'
 
-# 3. 轮询直到 status != running
+# 4. 轮询直到 status != running
 curl http://127.0.0.1:8001/api/scan/status
 ```
 
-扫描端点的错误码设计 (前端据此给不同提示):
+**错误码设计** (前端据此给不同提示):
 
 | 状态码 | code | 含义 / 用户该做什么 |
 |---|---|---|
-| 503 | `CDP_UNAVAILABLE` | CDP Chrome 没起 → 跑 `scripts/start_pdd_cdp_chrome.ps1` 并登录拼多多 |
+| 503 | `BROWSER_UNAVAILABLE` | `/api/browser/ensure` 起不来 → 按 `how_to_fix` 手动跑启动脚本 |
+| 503 | `CDP_UNAVAILABLE` | `/api/scan` 时 CDP 不通 (ensure 之后的兜底) → 跑 `scripts/start_pdd_cdp_chrome.ps1` 并登录拼多多 |
 | 409 | `SCAN_BUSY` | 已有任务在跑 (单飞锁, 防风控/防并发写坏 `data/`) → 等它结束 |
 | 422 | — | 关键词非法 (空 / >32 字符 / 含 `/ \ \x00`) |
 | 200 | — | 已启动, 轮询 `scan/status` |
+
+> ⚠️ **为什么登录判定要"双保险"**: 纯自动探测有两种误判 —— 假阴性 (已登录却读不到
+> cookie, 把用户卡死在闸门) 和假阳性 (有 cookie 但 PDD 风控仍返回登录页, 直接开扫
+> 只会拿到 0 商品)。所以自动探测降级成**加速器**, 手动「我已登录」按钮才是**保证**。
 
 返回 (节选):
 ```json
@@ -171,20 +196,21 @@ curl http://127.0.0.1:8001/api/scan/status
 ```bash
 cd upstream/manus-gui
 ./.venv/Scripts/python.exe -m pytest -q tests/test_ecommerce_*.py
-# → 212 passed
+# → 257 passed
 ```
 
 涵盖 (CI 在 ubuntu + py3.11 上跑同一组命令):
 - `test_ecommerce_analyzer.py` (29) — 过滤/排序/价格分布/聚合
 - `test_ecommerce_url_query.py` (41) — 拼多多 URL 构造 + 自然语言解析
-- `test_ecommerce_pdd_parser.py` (39) — `window.rawData` 提取 + 销量文案
-- `test_ecommerce_pdd_detail.py` (10) — 详情页 3 种销量文案 + 店铺名/评论数
-- `test_ecommerce_sales_semantics.py` (20) — 单品销量 vs 店铺累计口径贯穿
+- `test_ecommerce_pdd_parser.py` (41) — `window.rawData` 提取 + 销量文案 + 价格单位/口径
+- `test_ecommerce_pdd_detail.py` (18) — 详情页结构化字段 (`sideSalesTip`) + 正则回退
+- `test_ecommerce_sales_semantics.py` (24) — 单品销量 vs 店铺累计口径贯穿
 - `test_ecommerce_brand_compare.py` (5) — 6 品牌压行
 - `test_ecommerce_insight.py` (21) — 4 段洞察 + LLM 兜底链路
-- `test_ecommerce_api.py` (18) — FastAPI 端点 + CORS + schema
+- `test_ecommerce_api.py` (24) — FastAPI 端点 + schema + **CORS 白名单收紧**
 - `test_ecommerce_cache_status.py` (10) — 缓存清单 (空目录/去重/旧式文件名)
-- `test_ecommerce_scan_api.py` (19) — 日志反解 + 503/409/422 + 单飞锁
+- `test_ecommerce_scan_api.py` (22) — 日志反解(全量判定/尾部展示) + 503/409/422 + 单飞锁
+- `test_ecommerce_browser_ctl.py` (22) — 浏览器控制层 + 登录探测 (全 Stub, CI 零 Chrome)
 
 **不跑** `test_ctrip_cdp_setup.py` / `test_pdd_cdp_*.py` (要真实 Chrome + 桌面 CDP 通道)。
 
@@ -202,7 +228,8 @@ upstream/manus-gui/
 │   ├── ecommerce_insight.py       # LLM 总结层 + Stub 兜底
 │   ├── ecommerce_detail_store.py  # 详情页产物读取 (单品销量)
 │   ├── ecommerce_scan.py          # 扫描服务化: 子进程 + 单飞锁 + 状态轮询
-│   └── ecommerce_api.py            # FastAPI 服务 (5 端点)
+│   ├── ecommerce_browser_ctl.py   # 浏览器控制层: 幂等 ensure + 登录态探测 (只读)
+│   └── ecommerce_api.py            # FastAPI 服务 (7 端点)
 ├── scripts/
 │   ├── start_pdd_cdp_chrome.ps1   # 启专用 Chrome 9223
 │   ├── pdd_cdp_extract.py         # 只读扫描脚本
@@ -218,10 +245,10 @@ upstream/manus-gui/
 │   ├── pdd_raw_<品牌>_<时间戳>.html
 │   ├── pdd_detail_enrich_<时间戳>.json
 │   └── ui_*.png                   # 前端截图
-├── tests/test_ecommerce_*.py      # 212 测试
+├── tests/test_ecommerce_*.py      # 257 测试
 ├── requirements-ecommerce.txt     # 最小依赖
 ├── docs/handoff/                  # 设计决策日志 (Day 1-9)
-└── docs/BUG_PLAYBOOK.md           # 67 条真实踩坑知识库 (症状可检索)
+└── docs/BUG_PLAYBOOK.md           # 74 条真实踩坑知识库 (症状可检索)
 ```
 
 ---
@@ -255,7 +282,7 @@ upstream/manus-gui/
 - `FileHTMLSource` 默认从 `data/` 读 HTML, 不发起网络请求
 - LLM 走 Stub, 不绑 API key
 - 扫描器走 Protocol 注入 (`create_app(scanner=StubScanner())`), CI 零 CDP 依赖
-- 测试 212 个零依赖外部资源, 已接 GitHub Actions CI
+- 测试 257 个零依赖外部资源, 已接 GitHub Actions CI
 
 ### 6. 扫描跑子进程而不是 in-process
 - 扫描脚本含 playwright/CDP 全局状态, 崩了会连累 API 进程 → `subprocess.Popen` 隔离
@@ -272,7 +299,7 @@ upstream/manus-gui/
 
 ## 📚 详细文档
 
-- `docs/BUG_PLAYBOOK.md` — **67 条真实踩坑知识库** (症状可检索 + 动手前 Checklist)
+- `docs/BUG_PLAYBOOK.md` — **74 条真实踩坑知识库** (症状可检索 + 动手前 Checklist)
 - `docs/handoff/2026-09-10_任意关键词即查_实施提示词.md` — Day 9 扫描服务化设计
 - `docs/handoff/2026-09-05_OPENMANUS_CTRIP_PROJECT_HANDOVER.md` — 整体交接
 - `docs/handoff/2026-09-06_CTRIP_FORM_EXECUTOR_IMPLEMENTATION.md` — 状态机模式可参考

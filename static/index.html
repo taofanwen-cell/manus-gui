@@ -445,6 +445,21 @@ let scanTimer = null;
 let scanPolls = 0;
 const SCAN_MAX_POLLS = 300;   // 10 分钟硬上限: 脚本挂死也不能让用户无限等
 
+/* ---------- 浏览器就绪 + 登录闸门 (两阶段前置) ---------- */
+/* 「扫描并生成」现在分三段:
+     ① POST /api/browser/ensure   → 保证 CDP Chrome 就绪 (后端幂等, 已在跑不重起)
+     ② GET  /api/browser/login-status 轮询 → 登录闸门 (自动探测 + 人工兜底双保险)
+     ③ POST /api/scan            → 原有扫描流程
+   登录凭证只由人在 Chrome 窗口里填 —— 前端不碰账号, 只负责"催一句"和"放行"。 */
+const LOGIN_POLL_MS = 3000;
+const LOGIN_MAX_POLLS = 100;      // ~5 分钟没等到登录态就放弃, 不让按钮永远灰着
+let loginTimer = null;
+let loginPolls = 0;
+let loginAbort = false;
+let loginGateShown = false;
+// 放行原因 (自动探测命中 / 人工确认) —— 贯穿整个扫描期显示, 不只在中间态闪一下
+let scanNote = '';
+
 /* 关键词本身已含品类时不能再拼后缀, 否则会出现 "蓝牙音箱蓝牙耳机" 这种串味关键词 */
 const DEFAULT_SUFFIX = '蓝牙耳机';
 const hasCategory = (kw) => /耳机|耳麦|音箱|充电|数据线|手机壳/.test(kw);
@@ -470,6 +485,7 @@ function renderScan(s) {
     <div class="hd"><span>📡 正在扫描 ${done}/${kws.length}</span><span class="kw">${esc(s.current || '启动中…')}</span></div>
     <div class="scan-track"><div class="scan-fill" style="width:${pct}%"></div></div>
     <div style="color:var(--text-dim);">成功 ${(s.succeeded || []).length} · 失败 ${(s.failed || []).length} —— 扫描真实页面需要 30~60 秒</div>
+    ${scanNote ? `<div style="margin-top:6px;color:#34d399;">${esc(scanNote)}</div>` : ''}
     ${log ? `<pre class="scan-log">${log}</pre>` : ''}
   </div>`;
 }
@@ -481,6 +497,7 @@ function renderScanDone(s) {
   $('scan-zone').innerHTML = `<div class="${ok.length ? 'scan-ok' : 'scan-fail'}">
     <b>${ok.length ? '✓ 扫描完成' : '✗ 扫描失败'}</b>
     ${ok.length ? ` 已拿到数据: <b style="color:var(--cyan);">${ok.map(esc).join('、')}</b>, 正在生成报告…` : ''}
+    ${scanNote ? `<div style="margin-top:4px;color:#34d399;">${esc(scanNote)}</div>` : ''}
     ${bad.length ? `<div style="margin-top:6px;">失败 ${bad.length} 个: ${bad.map(f => esc(f.keyword) + ' — ' + esc(f.reason)).join('；')}</div>` : ''}
     ${needLogin ? `<div style="margin-top:8px;">拼多多登录态可能失效: 在 CDP Chrome 里重新扫码登录后重试。
       或先跑 <code>scripts/start_pdd_cdp_chrome.ps1</code> 确认 Chrome 已启动 (端口 9223)。</div>` : ''}
@@ -493,6 +510,87 @@ function stopScan(msg) {
   if (msg) $('scan-zone').innerHTML = `<div class="scan-fail"><b>✗ ${esc(msg)}</b></div>`;
 }
 
+function restoreBtns() {
+  $('scan-btn').disabled = false; $('generate-btn').disabled = false;
+}
+
+function stopLoginWatch() {
+  if (loginTimer) { clearInterval(loginTimer); loginTimer = null; }
+}
+
+/* 闸门 UI 只建一次; 之后每 3s 只刷新提示文字, 不重建按钮 (否则点击/焦点会被吞) */
+function updateLoginHint(s, launched) {
+  const el = $('login-hint');
+  if (!el) return;
+  const who = (s && s.cookie_names || []).slice(0, 8);
+  el.innerHTML =
+    (launched ? '已为你启动 Chrome 窗口。<br/>' : '') +
+    '没读到拼多多登录 cookie —— 请在 Chrome 窗口里手动登录。' +
+    (s && s.msg ? `<br/>${esc(s.msg)}` : '') +
+    (who.length ? `<br/><span style="font-size:12px;">当前 PDD 域 cookie: ${esc(who.join('、'))}</span>` : '');
+}
+
+function renderLoginGate(s, kw, launched) {
+  loginGateShown = true;
+  $('scan-zone').innerHTML = `<div class="scan-bar">
+    <div class="hd"><span>🔐 等待登录拼多多</span><span class="kw">${esc(kw)}</span></div>
+    <div id="login-hint" style="margin:9px 0 2px;color:var(--text-dim);"></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:11px;">
+      <button class="btn-glow" id="login-ok-btn" style="padding:6px 12px;">✓ 我已登录，开始爬</button>
+      <button class="btn-glow" id="login-recheck-btn" style="padding:6px 12px;background:linear-gradient(135deg,#94a3b8,#64748b);">↻ 重新检测</button>
+      <button class="btn-glow" id="login-cancel-btn" style="padding:6px 12px;background:linear-gradient(135deg,#94a3b8,#64748b);">✕ 取消</button>
+      <span style="color:var(--text-dim);font-size:12px;">每 3 秒自动检测一次…</span>
+    </div>
+    <div style="margin-top:9px;color:var(--text-dim);font-size:12px;">
+      没弹出窗口? 在<b>你自己的终端</b>跑 <code>scripts/start_pdd_cdp_chrome.ps1</code> (端口 9223)。
+      登录只由你手动完成 —— 本工具不会代填账号或验证码。
+    </div>
+  </div>`;
+  updateLoginHint(s, launched);
+  $('login-ok-btn').onclick = () => {
+    $('login-ok-btn').disabled = true;
+    stopLoginWatch();
+    enterScan(kw, '✓ 你已确认登录 (人工放行)');
+  };
+  $('login-recheck-btn').onclick = () => loginTick(kw, true);
+  $('login-cancel-btn').onclick = () => {
+    loginAbort = true; stopLoginWatch(); restoreBtns();
+    $('scan-zone').innerHTML = '';
+  };
+}
+
+async function loginTick(kw, manual) {
+  if (loginAbort) return;
+  if (manual) {
+    const b = $('login-recheck-btn');
+    if (b) { b.disabled = true; setTimeout(() => { if (b) b.disabled = false; }, 1200); }
+  }
+  loginPolls++;
+  let s = null;
+  try {
+    const r = await fetch('/api/browser/login-status');
+    s = await r.json();
+  } catch (e) { return; }        // 单次抖动不终止轮询
+  if (loginAbort) return;
+
+  if (s && s.logged_in) {        // 自动探测命中 → 把放行原因渲染进扫描条 (可追溯)
+    stopLoginWatch();
+    enterScan(kw, '✓ 检测到登录态 (cookie), 已自动放行');
+    return;
+  }
+  if (!s || !s.cdp_ready) {      // CDP 掉了 → 说清楚, 恢复按钮
+    stopLoginWatch(); restoreBtns();
+    $('scan-zone').innerHTML = `<div class="scan-fail"><b>✗ CDP Chrome 不可用了</b><br/>${esc((s && s.msg) || '端口 9223 无响应')}</div>`;
+    return;
+  }
+  if (loginPolls > LOGIN_MAX_POLLS) {
+    stopLoginWatch(); restoreBtns();
+    $('scan-zone').innerHTML = `<div class="scan-fail"><b>✗ 等待登录超时</b><br/>登录后点「我已登录，开始爬」重试。</div>`;
+    return;
+  }
+  if (loginGateShown) updateLoginHint(s, false); else renderLoginGate(s, kw, false);
+}
+
 async function scanAndGenerate() {
   const kw = ($('custom-input').value || '').trim();
   if (!kw) {
@@ -500,8 +598,54 @@ async function scanAndGenerate() {
     $('custom-input').focus();
     return;
   }
+  loginAbort = false; loginPolls = 0; loginGateShown = false; scanNote = '';
+  stopLoginWatch();
   $('scan-btn').disabled = true; $('generate-btn').disabled = true;
-  $('scan-zone').innerHTML = `<div class="scan-bar"><div class="hd"><span>📡 正在启动扫描…</span></div></div>`;
+
+  // ── 阶段①: 保证浏览器就绪 (后端幂等: 已在跑就绝不重起) ──────────────
+  $('scan-zone').innerHTML = `<div class="scan-bar"><div class="hd"><span>🖥️ 正在准备浏览器…</span><span class="kw">${esc(kw)}</span></div></div>`;
+  let ens;
+  try {
+    const r = await fetch('/api/browser/ensure', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const detail = d.detail || {};
+      $('scan-zone').innerHTML = `<div class="scan-fail">
+        <b>✗ 无法准备浏览器 (CDP 9223)</b><br/>${esc(detail.msg || d.msg || ('HTTP ' + r.status))}
+        <div style="margin-top:8px;">${esc(detail.how_to_fix || '')}</div></div>`;
+      restoreBtns(); return;
+    }
+    ens = d;
+  } catch (e) {
+    restoreBtns();
+    $('scan-zone').innerHTML = `<div class="scan-fail"><b>✗ ${esc(e.message)}</b></div>`;
+    return;
+  }
+  if (loginAbort) return;
+
+  // ── 阶段②: 登录闸门。先探一次, 命中就直接走, 不命中才挂轮询 ────────
+  let st = null;
+  try {
+    const r = await fetch('/api/browser/login-status');
+    st = await r.json();
+  } catch (e) { st = null; }
+  if (loginAbort) return;
+  if (st && st.logged_in) {
+    enterScan(kw, '✓ 检测到登录态 (cookie), 已自动放行');
+    return;
+  }
+  renderLoginGate(st || { cdp_ready: true, msg: '' }, kw, !!(ens && ens.launched));
+  loginTimer = setInterval(() => loginTick(kw), LOGIN_POLL_MS);
+}
+
+// 阶段③: 原有扫描流程 (浏览器已就绪 + 已确认登录后才走到这)
+// ``note``: 放行原因 (自动探测命中 / 人工确认) —— 渲染进扫描条, 别只在中间态闪一下。
+async function enterScan(kw, note) {
+  scanNote = note || '';
+  $('scan-zone').innerHTML = `<div class="scan-bar">
+    <div class="hd"><span>📡 正在启动扫描…</span><span class="kw">${esc(kw)}</span></div>
+    ${scanNote ? `<div style="margin-top:6px;color:#34d399;">${esc(scanNote)}</div>` : ''}
+  </div>`;
   try {
     const resp = await fetch('/api/scan', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
