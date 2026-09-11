@@ -118,6 +118,8 @@ def _record(record: dict, brand: str, top, detail) -> None:
         "shop_name": detail.shop_name,
         "comment_count": detail.comment_count,
         "goods_id": top.goods_id,
+        # 采集日期: 详情快照可能与列表页跨天, 报告里据此时效提示 (B-78)
+        "snapshot_date": datetime.now().strftime("%Y-%m-%d"),
     }
     print(
         f"[detail] {brand}: 单品销量 {detail.single_sales} "

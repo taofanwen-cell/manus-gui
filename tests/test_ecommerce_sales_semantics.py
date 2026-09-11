@@ -9,6 +9,11 @@
 修法: 详情页单品销量 (``data/pdd_detail_*.json`` 的 ``single_sales``) 优先,
 拿不到才降级, 且**必须带来源标记** ``top_sales_source`` 让下游按口径标标签。
 
+**B-78 补完 (2026-09-11)**: 上述"单品销量优先"只在**同一商品** (``same_goods=True``)
+时成立。详情页快照与列表页 top1 可能是**不同 goods_id** 的两件商品, 那时整行必须
+锚定列表页 top1 (销量取列表页月销、口径 ``shop_total``), 绝不能把详情页另一件商品的
+单品销量拼进同一行。所以 ``_resolve_sales`` 现在要求显式传入 ``same_goods``。
+
 本文件的每个用例都是在防这个坑复发。
 """
 from __future__ import annotations
@@ -49,8 +54,8 @@ class _FakeTop:
 
 
 def test_detail_single_sales_wins_over_list_total():
-    """详情页有单品销量 → 必须用它, 不能拿列表页 4000万累计顶上。"""
-    sales, src, shop = _resolve_sales(_FakeTop(40_263_000), {"single_sales": 113_000})
+    """详情页有单品销量 → 必须用它, 不能拿列表页 4000万累计顶上 (需 same_goods)。"""
+    sales, src, shop = _resolve_sales(_FakeTop(40_263_000), {"single_sales": 113_000}, same_goods=True)
     assert sales == 113_000          # 单品 11.3万
     assert src == SALES_SRC_SINGLE
     assert shop == 40_263_000        # 累计数仍作为参考列保留
@@ -58,21 +63,21 @@ def test_detail_single_sales_wins_over_list_total():
 
 def test_fallback_to_shop_total_when_no_single_sales():
     """详情页没采到 → 降级用累计, 但 source 必须是 shop_total (让下游标 ⚠)。"""
-    sales, src, shop = _resolve_sales(_FakeTop(1_472_000), {"single_sales": None})
+    sales, src, shop = _resolve_sales(_FakeTop(1_472_000), {"single_sales": None}, same_goods=True)
     assert sales == 1_472_000
     assert src == SALES_SRC_SHOP_TOTAL
 
 
 def test_no_detail_at_all_falls_back_and_marks_shop_total():
     """压根没跑详情页采集 → 也走 shop_total, 绝不能冒充 single。"""
-    sales, src, _ = _resolve_sales(_FakeTop(50_000_000), None)
+    sales, src, _ = _resolve_sales(_FakeTop(50_000_000), None, same_goods=False)
     assert sales == 50_000_000
     assert src == SALES_SRC_SHOP_TOTAL
 
 
 def test_single_sales_none_and_no_list_sales_is_unknown():
     """两个都没有 → unknown, 别编数字。"""
-    sales, src, shop = _resolve_sales(_FakeTop(None), {})
+    sales, src, shop = _resolve_sales(_FakeTop(None), {}, same_goods=False)
     assert sales is None
     assert src == SALES_SRC_UNKNOWN
     assert shop is None
@@ -80,22 +85,34 @@ def test_single_sales_none_and_no_list_sales_is_unknown():
 
 def test_single_sales_zero_is_kept_not_falsy_skipped():
     """single_sales=0 是有效值, 不能被 `if not single` 当成缺失跳过 (bool 短路坑)。"""
-    sales, src, _ = _resolve_sales(_FakeTop(9_999), {"single_sales": 0})
+    sales, src, _ = _resolve_sales(_FakeTop(9_999), {"single_sales": 0}, same_goods=True)
     assert sales == 0
     assert src == SALES_SRC_SINGLE
 
 
 def test_single_sales_non_int_ignored():
     """详情页字段类型不对 (比如字符串) → 当没采到, 降级。"""
-    sales, src, _ = _resolve_sales(_FakeTop(610_000), {"single_sales": "5万"})
+    sales, src, _ = _resolve_sales(_FakeTop(610_000), {"single_sales": "5万"}, same_goods=True)
     assert sales == 610_000
     assert src == SALES_SRC_SHOP_TOTAL
 
 
 def test_shop_sales_prefers_detail_list_sales():
     """参考列优先用详情页记录的 list_sales, 没有才用当前 top 的。"""
-    _, _, shop = _resolve_sales(_FakeTop(1), {"single_sales": 5, "list_sales": 40_263_000})
+    _, _, shop = _resolve_sales(_FakeTop(1), {"single_sales": 5, "list_sales": 40_263_000}, same_goods=True)
     assert shop == 40_263_000
+
+
+def test_resolve_sales_misaligned_ignores_detail_single():
+    """B-78 补完: goods_id 不一致 (same_goods=False) 时, 即使详情页有单品销量,
+    也绝不能采用 —— 整行锚定列表页 top1 月销 (shop_total), 否则会把另一件商品的
+    单品销量拼进同一行 (名价自洽后读者反而失去怀疑销量的理由)。"""
+    sales, src, _ = _resolve_sales(
+        _FakeTop(1_200_000), {"single_sales": 216_000, "goods_id": "A"}, same_goods=False
+    )
+    assert sales == 1_200_000
+    assert src == SALES_SRC_SHOP_TOTAL
+    assert sales != 216_000
 
 
 # ---------------------------------------------------------------------------

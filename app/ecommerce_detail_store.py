@@ -38,6 +38,22 @@ DETAIL_GLOB = "pdd_detail_*.json"
 DetailFields = dict[str, Any]
 
 
+def _snapshot_date_from_path(path: Path) -> str | None:
+    """从 ``pdd_detail_YYYYmmddTHHMMSS.json`` 文件名反推采集日期 ``YYYY-mm-dd``.
+
+    历史/未来详情文件可能没在 JSON 内显式标采集日期, 文件名里的时间戳是稳定判据,
+    用它兜底, 保证报告总能标出快照日期 (与列表页可能跨天, 见 B-78 时效说明)。
+    """
+    stem = path.stem
+    if not stem.startswith("pdd_detail_"):
+        return None
+    ts = stem[len("pdd_detail_"):]
+    if len(ts) >= 8 and ts[:8].isdigit():
+        y, m, d = ts[:4], ts[4:6], ts[6:8]
+        return f"{y}-{m}-{d}"
+    return None
+
+
 def find_detail_files(data_dir: Path) -> list[Path]:
     """按 ``(mtime, 文件名)`` **升序**返回所有 ``pdd_detail_*.json``.
 
@@ -87,8 +103,14 @@ def load_detail_merged(data_dir: Path) -> dict[str, DetailFields]:
             continue
         if not isinstance(raw, dict):
             continue
-        # 只保留 value 是 dict 的条目, 防止坏数据污染下游
-        merged.update({k: v for k, v in raw.items() if isinstance(v, dict)})
+        snap = _snapshot_date_from_path(path)  # 从文件名时间戳反推采集日期
+        # 只保留 value 是 dict 的条目, 防止坏数据污染下游; 缺 snapshot_date 的注入兜底值
+        for k, v in raw.items():
+            if not isinstance(v, dict):
+                continue
+            if "snapshot_date" not in v:  # 优先用写入时显式标注的, 否则用文件名反推
+                v = {**v, "snapshot_date": snap}
+            merged[k] = v
     return merged
 
 
@@ -110,8 +132,12 @@ def load_latest_detail(data_dir: Path) -> dict[str, DetailFields]:
         return {}
     if not isinstance(raw, dict):
         return {}
-    # 只保留 value 是 dict 的条目, 防止坏数据污染下游
-    return {k: v for k, v in raw.items() if isinstance(v, dict)}
+    # 只保留 value 是 dict 的条目, 防止坏数据污染下游; 缺 snapshot_date 的注入兜底值
+    snap = _snapshot_date_from_path(path)
+    return {
+        k: ({**v, "snapshot_date": snap} if isinstance(v, dict) and "snapshot_date" not in v else v)
+        for k, v in raw.items() if isinstance(v, dict)
+    }
 
 
 def detail_for(brand: str, data_dir: Path) -> DetailFields | None:

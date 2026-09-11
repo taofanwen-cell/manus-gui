@@ -68,8 +68,63 @@ SALES_SRC_SINGLE = "single"        # 详情页单品销量 (真实, 可跨品牌
 SALES_SRC_SHOP_TOTAL = "shop_total"  # 列表页 salesTip 店铺/品牌累计 (不可当单品比)
 SALES_SRC_UNKNOWN = "unknown"
 
+# ---------------------------------------------------------------------------
+# 品类一致性检查 (问题①, B-79)
+# ---------------------------------------------------------------------------
+#: 本项目是蓝牙耳机竞品分析, 报告标题/主题据此判断预期品类
+EXPECTED_CATEGORY_LABEL = "蓝牙耳机"
+#: 标题含这些 → 视为「符合预期品类」(耳机类), 优先级最高
+_EARPHONE_HINTS = ("耳机", "耳麦", "耳塞", "tws", "headphone", "earbuds", "蓝牙耳",
+                   "真无线", "降噪")
+#: 标题含这些 (且非耳机) → 视为「疑似非预期品类」(手机类)
+_PHONE_HINTS = ("手机", "reno", "find ", "findx", "mate ", "iphone", "红米",
+                "redmi note", "note ", "magic", "畅享", "galaxy", "小米1", "gt ")
+#: 触发顶部警告的阈值: 疑似手机绝对数 >= 此值 且 占比 >= 此比例
+_CATEGORY_DRIFT_MIN_COUNT = 3
+_CATEGORY_DRIFT_MIN_RATIO = 0.5
 
-def _resolve_sales(top, detail: dict | None) -> tuple[int | None, str, int | None]:
+
+def _classify_title_category(title: str) -> str:
+    """把一个商品标题归类: ``earphone`` / ``phone`` / ``other``.
+
+    ``earphone`` 优先判定 —— 含耳机词的即便也含手机词 (如 "红米 Buds 耳机") 也算耳机,
+    不计入疑似手机, 避免把 "红米 Buds" 这类真耳机误判成手机。
+    """
+    t = (title or "").lower()
+    if any(h in t for h in _EARPHONE_HINTS):
+        return "earphone"
+    if any(h in t for h in _PHONE_HINTS):
+        return "phone"
+    return "other"
+
+
+def detect_category_drift(titles: list[str] | None) -> dict:
+    """统计样本标题的品类分布, 识别「预期品类漂移」(如手机品牌搜出一堆手机).
+
+    返回 dict: ``total / earphone / phone / other / phone_ratio / triggered /
+    expected``. ``triggered=True`` 表示疑似手机占比过半且达最小绝对数, 应在报告顶部告警。
+    """
+    if not titles:
+        return {"total": 0, "earphone": 0, "phone": 0, "other": 0,
+                "phone_ratio": 0.0, "triggered": False, "expected": EXPECTED_CATEGORY_LABEL}
+    cats = [_classify_title_category(t) for t in titles]
+    total = len(titles)
+    phone = cats.count("phone")
+    earphone = cats.count("earphone")
+    ratio = phone / total if total else 0.0
+    triggered = phone >= _CATEGORY_DRIFT_MIN_COUNT and ratio >= _CATEGORY_DRIFT_MIN_RATIO
+    return {
+        "total": total,
+        "earphone": earphone,
+        "phone": phone,
+        "other": total - phone - earphone,
+        "phone_ratio": ratio,
+        "triggered": triggered,
+        "expected": EXPECTED_CATEGORY_LABEL,
+    }
+
+
+def _resolve_sales(top, detail: dict | None, *, same_goods: bool) -> tuple[int | None, str, int | None]:
     """决定 ``top_sales`` 取哪个值, 并说明来源.
 
     销量语义是这个项目最容易搞错的地方 (见 README「关键设计决策」):
@@ -78,8 +133,15 @@ def _resolve_sales(top, detail: dict | None) -> tuple[int | None, str, int | Non
       跨品牌比"谁单品卖得好"是错的。
     - 详情页正文 "热销/已抢/总售 N 件" = **单品销量**, 才是能比的那个。
 
-    所以优先级: **详情页单品销量 > 列表页累计**, 且**必须把来源一起返回**,
-    让下游按来源标标签 —— 不能只给一个数字让调用方自己猜语义。
+    **同源约束 (B-78 补完)**: 热度机型行的 机型名/价格/销量 必须锚定**同一商品**
+    (同一 ``goods_id``), 不允许各取一半。因此:
+
+    - 仅当 ``same_goods`` (详情页 goods_id == 列表页 top1 goods_id) 时, 才允许用详情页
+      单品销量 —— 它与展示的机型名/价格同属一件商品, 标 "单品销量" 才站得住;
+    - ``same_goods`` 为 False 时, **整行锚定列表页 top1**: 销量取列表页月销
+      (:data:`SALES_SRC_SHOP_TOTAL` 口径), 绝不把详情页另一件商品的单品销量拼进这一行;
+    - 没有列表页 top1 (只有详情页快照) 时, 整行都来自详情页, 销量用详情页单品销量
+      (此时同样同源, 但需注意快照日期可能跨天, 见报告标注)。
 
     返回 ``(top_sales, source, shop_sales)``:
       - ``top_sales``   最终展示的销量 (None = 都没有)
@@ -94,10 +156,15 @@ def _resolve_sales(top, detail: dict | None) -> tuple[int | None, str, int | Non
         if isinstance(v, int):  # 详情页可能没匹配到销量文案 → None
             single = v
 
-    if single is not None:
+    # 同源: 只有详情页与列表页 top1 是同一商品时, 详情页单品销量才对得上展示的机型
+    if same_goods and single is not None:
         return single, SALES_SRC_SINGLE, (detail or {}).get("list_sales") or list_sales
+    # 不一致 / 详情页没采到单品销量 → 整行锚定列表页 top1 月销 (店铺/品牌累计口径)
     if list_sales is not None:
         return list_sales, SALES_SRC_SHOP_TOTAL, list_sales
+    # 无列表页 top1, 整行只能靠详情页快照 (同源兜底)
+    if single is not None:
+        return single, SALES_SRC_SINGLE, (detail or {}).get("list_sales") or None
     return None, SALES_SRC_UNKNOWN, None
 
 
@@ -115,11 +182,32 @@ def _brand_row(brand: str, rep, n_parsed: int, *, detail: dict | None = None) ->
     # 词云要用所有特征词的频次聚合, 取 top10 给前端合并去重; markdown 报告仍只显示 TOP3
     kw = rep.top_keywords[:10]
     top = rep.top_competitors[0] if rep.top_competitors else None
-    top_sales, sales_source, shop_sales = _resolve_sales(top, detail)
-    # 详情页采集的机型名跟列表页是同一个 top1, 用详情页的更完整 (未截断)
-    top_model = (detail or {}).get("top_model") if detail else None
-    if not top_model and top is not None:
+    # 热度机型行的 机型名/价格/销量 必须锚定**同一商品** (同一 goods_id), 不允许各取一半 (B-78):
+    #   - detail.goods_id == 列表页 top1.goods_id → 同一商品, 可混合 (详情页名 + 列表页当天价 + 详情页单品销量);
+    #   - 不一致 → 整行只用列表页当天 top1 (名字+价格+销量都自洽, 不跨商品拼);
+    #   - 都不在 → 名字可来自 detail, 价格留空, 销量退回详情页快照 (整行同源自详情页)。
+    detail_goods_id = (detail or {}).get("goods_id")
+    top_goods_id = getattr(top, "goods_id", None) if top is not None else None
+    same_goods = (
+        bool(detail_goods_id) and bool(top_goods_id)
+        and str(detail_goods_id) == str(top_goods_id)
+    )
+    if top is not None and same_goods:
+        # 同一商品: 机型名用详情页(更完整), 价格用列表页当天真实价
+        top_model = (detail or {}).get("top_model")
+        top_price = top.price_cny
+        if not top_model:  # 防御: 详情页名缺失时回退列表页名
+            top_model = top.title[:24] + "…" if len(top.title) > 24 else top.title
+    elif top is not None:
+        # 不同时: 整行只用列表页当天 top1 (名字+价格+销量都自洽, 不跨商品拼)
         top_model = top.title[:24] + "…" if len(top.title) > 24 else top.title
+        top_price = top.price_cny
+    else:
+        # 无列表页 top (测试 stub / 解析退化兜底): 名字可来自 detail, 价格留空, 不强行 "—"
+        top_model = (detail or {}).get("top_model")
+        top_price = None
+    # 销量跟随同源决策 (见上方 same_goods): 仅同商品才用详情页单品销量, 否则整行锚定列表页 top1 月销
+    top_sales, sales_source, shop_sales = _resolve_sales(top, detail, same_goods=same_goods)
     return {
         "brand": brand,
         "parsed": n_parsed,
@@ -139,7 +227,8 @@ def _brand_row(brand: str, rep, n_parsed: int, *, detail: dict | None = None) ->
         "top_model": top_model or "—",
         # 别名: insight 层/前端按 `top_product` 读, 以前只有 `top_model` → 机型名一直是 "—"
         "top_product": top_model or "—",
-        "top_price": top.price_cny if top else None,
+        # 价格与 top_model 来自同一商品 (见上方 goods_id 对齐), 不再跨商品拼装 (B-78)
+        "top_price": top_price,
         "top_sales": top_sales,
         # 语义标记: 下游按这个决定标签 (单品销量 / 店铺累计), 不要只看数字
         "top_sales_source": sales_source,
@@ -148,6 +237,8 @@ def _brand_row(brand: str, rep, n_parsed: int, *, detail: dict | None = None) ->
         # 详情页补充字段 (列表页没有)
         "shop_name": (detail or {}).get("shop_name"),
         "comment_count": (detail or {}).get("comment_count"),
+        # 详情页快照采集日期 (可能与列表页跨天, 报告里标出, 见 B-78 快照时效说明)
+        "detail_snapshot_date": (detail or {}).get("snapshot_date"),
         # 给 insight 层消费的完整字段 (list[dict] 带 count/pct)
         "top_keywords": [
             {"keyword": k.keyword, "count": k.count, "pct": k.pct} for k in kw
@@ -180,10 +271,12 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
             sales_txt = str(sales)
         # 语义标记: 单品销量可跨品牌比, 店铺/品牌累计不行 —— 表格里直接写清楚
         src = r.get("top_sales_source")
+        snap = r.get("detail_snapshot_date")
         if not sales:
             src_txt = "—"
         elif src == SALES_SRC_SINGLE:
-            src_txt = "单品销量"
+            # 单品销量来自详情页快照, 注明采集日期, 提醒读者与列表页价格可能跨天
+            src_txt = f"单品销量 (快照 {snap})" if snap else "单品销量"
         elif src == SALES_SRC_SHOP_TOTAL:
             src_txt = "⚠ 店铺/品牌累计"
         else:
@@ -212,6 +305,16 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
 
     scanned_txt = "、".join(scanned) if scanned else "无"
     failed_txt = "、".join(failed) if failed else "无"
+
+    # 快照日期提示: 任一品牌用了详情页单品销量, 注明其采集日期 (可能与列表页跨天)
+    snap_dates = sorted({
+        r.get("detail_snapshot_date") for r in rows
+        if r.get("top_sales_source") == SALES_SRC_SINGLE and r.get("detail_snapshot_date")
+    })
+    snap_note = (
+        "\n>\n> **数据时效提示**: 上表「单品销量」来自商品详情页快照"
+        f"（采集日期：{'、'.join(snap_dates)}），与列表页价格可能跨天采集，请留意时效性。"
+    ) if snap_dates else ""
 
     return f"""# 拼多多蓝牙耳机竞品横向对比报告
 
@@ -244,7 +347,7 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
 
 > **销量口径说明**: 「单品销量」来自商品详情页正文 ("热销/已抢/总售 N 件"), 可跨品牌比;
 > 「⚠ 店铺/品牌累计」来自列表页 `salesTip` ("品牌热销 N 件"), 是该店铺/品牌的历史累计数,
-> **不能当作单品销量跨品牌比较**。详情页没采到时才降级用后者。
+> **不能当作单品销量跨品牌比较**。详情页没采到时才降级用后者。{snap_note}
 
 ## 五、结论要点
 
@@ -316,7 +419,10 @@ def main() -> int:
                 continue
 
             rep = analyze(competitors, pref)
-            row = _brand_row(brand, rep, len(competitors), detail=details.get(brand))
+            row = _brand_row(
+                brand, rep, len(competitors),
+                detail=details.get(brand),
+            )
             rows.append(row)
             scanned.append(brand)
             pd = rep.price_dist

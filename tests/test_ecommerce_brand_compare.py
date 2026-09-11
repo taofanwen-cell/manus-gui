@@ -22,7 +22,7 @@ from app.ecommerce_analyzer import (  # noqa: E402
     PriceDistribution,
     TopKeyword,
 )
-from ecommerce_brand_compare import _brand_row, _render_markdown  # noqa: E402
+from ecommerce_brand_compare import _brand_row, _render_markdown, detect_category_drift  # noqa: E402
 
 
 def _make_report(median=83, top_price=85, top_sales=40_263_000, n_kw=3):
@@ -103,3 +103,128 @@ def test_render_markdown_small_sales_not_wan():
     md = _render_markdown(rows, ["QCY"], [], "note")
     assert "6100" in md
     assert "0.61万" not in md
+
+
+def _make_report_ex(goods_id="1", title="X1蓝牙耳机小奶豆真无线半入耳", price_cny=85,
+                    median=83, top_sales=40_263_000, n_kw=3):
+    """可指定 top1 商品 goods_id/title/price 的 report 构造器 (供 B-78 对齐测试用)."""
+    comp = Competitor(
+        goods_id=goods_id, title=title, price_cny=price_cny,
+        monthly_sales=top_sales, feature_tags=("真无线", "降噪"),
+    )
+    pd = PriceDistribution(
+        bucket_under_100=19, bucket_100_300=1, bucket_300_800=0, bucket_over_800=0,
+        median=median, p25=80, p75=90, min=74, max=131,
+    )
+    kws = [
+        TopKeyword("真无线", 10, 0.5),
+        TopKeyword("降噪", 8, 0.4),
+        TopKeyword("游戏", 6, 0.3),
+    ][:n_kw]
+    return AnalysisReport(
+        sample_size=20, filtered_size=20, summary="x", price_dist=pd,
+        top_keywords=tuple(kws), top_shops=(), top_competitors=(comp,), warnings=(),
+    )
+
+
+# --- 问题②: 热度机型行 goods_id 对齐 (B-78) ---
+
+def test_brand_row_top_aligned_same_goods_mixes_detail_name_and_list_price():
+    # detail.goods_id == 列表页 top1.goods_id → 混合: 机型名用详情页(更完整), 价格用列表页当天价
+    rep = _make_report_ex(goods_id="960370019979", title="OPPO Enco Free4 蓝牙耳机", price_cny=349)
+    detail = {"goods_id": "960370019979",
+              "top_model": "【试用7天】OPPO Enco Free4入耳式主动降噪旗舰蓝牙耳机",
+              "top_price": 349, "single_sales": 216000}
+    row = _brand_row("OPPO", rep, 20, detail=detail)
+    assert row["top_model"] == "【试用7天】OPPO Enco Free4入耳式主动降噪旗舰蓝牙耳机"
+    assert row["top_price"] == 349  # 列表页当天价 (同一商品)
+    assert row["top_product"] == row["top_model"]
+
+
+def test_brand_row_top_misaligned_uses_list_top_only():
+    # detail.goods_id != 列表页 top1.goods_id → 整行只用列表页当天 top1 (名字+价格自洽)
+    rep = _make_report_ex(goods_id="Reno15", title="OPPO Reno15 5G手机 12+256G", price_cny=2677)
+    detail = {"goods_id": "960370019979", "top_model": "OPPO Enco Free4 蓝牙耳机", "top_price": 349}
+    row = _brand_row("OPPO", rep, 20, detail=detail)
+    assert row["top_model"] == "OPPO Reno15 5G手机 12+256G"  # 列表页名, 不是详情页耳机名
+    assert row["top_price"] == 2677  # 列表页价, 与名字同一商品
+    assert "Enco" not in row["top_model"]
+
+
+def test_brand_row_no_detail_uses_list_top():
+    rep = _make_report_ex(goods_id="1", title="X1蓝牙耳机小奶豆", price_cny=85)
+    row = _brand_row("漫步者", rep, 20)  # 无 detail
+    assert row["top_model"] == "X1蓝牙耳机小奶豆"
+    assert row["top_price"] == 85
+
+
+def test_brand_row_no_top_no_detail_blank():
+    rep = AnalysisReport(
+        sample_size=0, filtered_size=0, summary="x", price_dist=None,
+        top_keywords=(), top_shops=(), top_competitors=(), warnings=(),
+    )
+    row = _brand_row("空", rep, 0)
+    assert row["top_model"] == "—"
+    assert row["top_price"] is None
+
+
+def test_brand_row_misaligned_sales_not_from_detail():
+    # goods_id 不一致时, 整行锚定列表页 top1: 销量取自列表页月销 (shop_total),
+    # 绝不把详情页另一件商品的单品销量 (216000) 拼进这一行 (B-78 补完核心回归)
+    rep = _make_report_ex(goods_id="Reno15", title="OPPO Reno15 5G手机 12+256G",
+                          price_cny=2677, top_sales=1_200_000)
+    detail = {"goods_id": "960370019979", "top_model": "OPPO Enco Free4 蓝牙耳机",
+              "top_price": 349, "single_sales": 216000}
+    row = _brand_row("OPPO", rep, 20, detail=detail)
+    # 机型名/价格来自列表页 top1 (Reno15), 自洽
+    assert row["top_model"] == "OPPO Reno15 5G手机 12+256G"
+    assert row["top_price"] == 2677
+    # 销量必须来自列表页 top1 (120万), 而不是详情页的 216000 (Enco Free4 耳机)
+    assert row["top_sales"] == 1_200_000
+    assert row["top_sales"] != 216000
+    assert row["top_sales_source"] == "shop_total"
+
+
+def test_brand_row_aligned_sales_from_detail():
+    # same_goods 时, 销量取自详情页单品销量 (与展示机型同源, 才标"单品销量")
+    rep = _make_report_ex(goods_id="960370019979", title="OPPO Enco Free4 蓝牙耳机", price_cny=349)
+    detail = {"goods_id": "960370019979", "top_model": "OPPO Enco Free4 蓝牙耳机",
+              "top_price": 349, "single_sales": 216000}
+    row = _brand_row("OPPO", rep, 20, detail=detail)
+    assert row["top_sales"] == 216000
+    assert row["top_sales_source"] == "single"
+
+
+# --- 问题①: 品类一致性检查 (B-79) ---
+
+def test_detect_category_drift_classifies_and_triggers():
+    titles = (
+        ["OPPO Reno15 5G手机", "OPPO Find X9 手机", "OPPO 手机官方旗舰"]
+        + ["OPPO K12 手机"] * 13   # 共 16 手机
+        + ["OPPO Enco Free4 蓝牙耳机", "OPPO 降噪耳机", "OPPO 真无线耳机", "OPPO 耳麦"]  # 4 耳机
+    )
+    d = detect_category_drift(titles)
+    assert d["total"] == 20
+    assert d["phone"] == 16
+    assert d["earphone"] == 4
+    assert d["triggered"] is True
+    assert d["expected"] == "蓝牙耳机"
+
+
+def test_detect_category_drift_all_earphone_not_triggered():
+    titles = ["X1蓝牙耳机", "Redmi Buds 蓝牙耳机", "QCY 蓝牙耳机"] * 6  # 18 耳机
+    d = detect_category_drift(titles)
+    assert d["phone"] == 0
+    assert d["triggered"] is False
+
+
+def test_detect_category_drift_threshold_and_empty():
+    assert detect_category_drift(None)["triggered"] is False
+    assert detect_category_drift([])["triggered"] is False
+    # 阈值: 占比过半但绝对数 < 3 不触发
+    d = detect_category_drift(["A手机", "B蓝牙耳机"])
+    assert d["phone"] == 1
+    assert d["triggered"] is False
+
+
+
