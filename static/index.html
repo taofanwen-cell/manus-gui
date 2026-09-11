@@ -369,7 +369,7 @@ function renderAlert(warnings) {
   const el = $('alert-zone');
   if (!warnings || !warnings.length) { el.innerHTML = ''; return; }
   el.innerHTML = `<div class="alert-bar">
-    <b>⚠ 部分数据缺失</b> (${warnings.length} 条) — 以下关键词没有缓存数据, 报告中已跳过:
+    <b>⚠ 数据质量提醒</b> (${warnings.length} 条):
     <ul>${warnings.map(w => `<li>${w}</li>`).join('')}</ul>
   </div>`;
 }

@@ -168,7 +168,8 @@ def _resolve_sales(top, detail: dict | None, *, same_goods: bool) -> tuple[int |
     return None, SALES_SRC_UNKNOWN, None
 
 
-def _brand_row(brand: str, rep, n_parsed: int, *, detail: dict | None = None) -> dict:
+def _brand_row(brand: str, rep, n_parsed: int, *, detail: dict | None = None,
+               titles: list[str] | None = None) -> dict:
     """把单个品牌的 AnalysisReport 压成一行的对比数据.
 
     同时返回 ``kw1/kw2/kw3`` (兼容 markdown 报告) 和
@@ -245,6 +246,8 @@ def _brand_row(brand: str, rep, n_parsed: int, *, detail: dict | None = None) ->
         ],
         # 给 insight 层消费的数据质量警告
         "warnings": list(rep.warnings),
+        # 品类一致性 (B-79): 本品牌样本标题与预期品类「蓝牙耳机」漂移的判定
+        "category_drift": detect_category_drift(titles),
     }
 
 
@@ -316,12 +319,29 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
         f"（采集日期：{'、'.join(snap_dates)}），与列表页价格可能跨天采集，请留意时效性。"
     ) if snap_dates else ""
 
+    # 品类一致性提醒 (问题①, B-79): 任一品牌疑似手机占比过半 → 报告顶部告警
+    _drifts = [r.get("category_drift") or {} for r in rows]
+    _triggered = [(r["brand"], d) for r, d in zip(rows, _drifts) if d.get("triggered")]
+    if _triggered:
+        _lines = "\n".join(
+            f"- 品牌 **{brand}**：疑似手机 {d.get('phone')} 个 / 有效样本 {d.get('total')} 个"
+            f"（占比 {d.get('phone_ratio', 0):.0%}），与预期品类「{d.get('expected')}」不符"
+            for brand, d in _triggered
+        )
+        warning_md = (
+            "\n> ⚠ **品类一致性提醒**：以下品牌搜索结果疑似手机占比偏高，"
+            "与报告标题预期品类不符，请人工复核搜索词 / 筛选条件：\n" + _lines
+        )
+    else:
+        warning_md = ""
+
     return f"""# 拼多多蓝牙耳机竞品横向对比报告
 
 > 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 > 对比品牌: {scanned_txt}
 > 失败品牌: {failed_txt}
 > {source_note}
+{warning_md}
 
 ## 一、价格带横向对比
 
@@ -422,6 +442,7 @@ def main() -> int:
             row = _brand_row(
                 brand, rep, len(competitors),
                 detail=details.get(brand),
+                titles=[c.title for c in competitors],
             )
             rows.append(row)
             scanned.append(brand)

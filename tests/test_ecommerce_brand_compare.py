@@ -227,4 +227,30 @@ def test_detect_category_drift_threshold_and_empty():
     assert d["triggered"] is False
 
 
+# --- 问题①: 品类一致性检查 (B-79) ---
+
+def test_brand_row_category_drift_field():
+    titles = ["OPPO Reno15 手机"] * 16 + ["OPPO Enco 蓝牙耳机"] * 4
+    rep = _make_report_ex()
+    row = _brand_row("OPPO", rep, 20, titles=titles)
+    d = row["category_drift"]
+    assert d["total"] == 20 and d["phone"] == 16 and d["triggered"] is True
+
+
+def test_render_markdown_emits_category_warning():
+    titles = ["OPPO Reno15 手机"] * 16 + ["OPPO Enco 蓝牙耳机"] * 4
+    rep = _make_report_ex()
+    row = _brand_row("OPPO", rep, 20, titles=titles)
+    md = _render_markdown([row], ["OPPO"], [], "note")
+    assert "品类一致性提醒" in md
+    assert "疑似手机" in md
+    assert "16 个" in md
+
+
+def test_render_markdown_no_category_warning_when_clean():
+    titles = ["X1蓝牙耳机"] * 20
+    rep = _make_report_ex()
+    row = _brand_row("漫步者", rep, 20, titles=titles)
+    md = _render_markdown([row], ["漫步者"], [], "note")
+    assert "品类一致性提醒" not in md
 

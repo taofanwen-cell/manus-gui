@@ -337,6 +337,7 @@ def _to_brand_row_dict(row: dict) -> CompetitorBrandRow:
         shop_sales=row.get("shop_sales"),
         shop_name=row.get("shop_name"),
         comment_count=row.get("comment_count"),
+        category_drift=row.get("category_drift"),
     )
 
 
@@ -418,6 +419,16 @@ def build_report(
             insights = insight_gen.generate(rows)
         except Exception as e:  # noqa: BLE001
             global_warnings.append(f"insight 生成失败: {type(e).__name__}")
+
+    # 品类一致性 (B-79): 样本标题与预期品类「蓝牙耳机」漂移的品牌, 汇总进全局警告,
+    # 前端 renderAlert 会自动显示 —— 满足"失败要响", 不让失真口径静默流入报告。
+    for r in rows:
+        d = r.get("category_drift") or {}
+        if d.get("triggered"):
+            global_warnings.append(
+                f"{r['brand']}: {d['total']} 个有效样本中 {d['phone']} 个标题疑似手机"
+                f"（与预期品类「蓝牙耳机」不符），价格带/定位口径可能失真"
+            )
 
     return CompetitorReportResponse(
         brands=[b for b in req.brands if any(r["brand"] == b for r in rows)],
