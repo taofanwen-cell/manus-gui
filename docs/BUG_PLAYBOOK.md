@@ -32,6 +32,7 @@
 | 同秒写入的文件 `max(mtime)` 结果随机 | B-30 |
 | `fetch`/取最新文件只按 mtime 排，时间打平取到旧文件 | B-74 (B-30 第三处) |
 | `connect_over_cdp` 没传 `timeout`、无界卡住拖垮轮询端点 | B-75 (B-68) |
+| `scripts/` 里"取最新 HTML"单判据排序 + scan 脚本 `connect_over_cdp` 无 timeout（同款复发） | B-76 (B-74/B-75 脚本侧) |
 | 测试有时过有时挂（flaky） | B-30 / B-31 |
 | 自己写的 fake 缺字段导致测试挂 | B-28 |
 | 手搓的 mock 数据源行为跟真的不一样 | B-29 |
@@ -564,14 +565,22 @@
 - **根因**：B-30 的坑在 `find_latest_detail_file` 和 `build_cache_status` 两处都修过，唯独 `app/ecommerce_api.py` 的 `FileHTMLSource.fetch()` 漏了，排序键还是 `key=lambda p: p.stat().st_mtime`（单判据）。
 - **修法**：排序键改成 `key=lambda p: (p.stat().st_mtime, p.name)`（与另外两处一致）。
 - **测试**：`test_ecommerce_api.py::TestFileHTMLSource::test_picks_latest_by_mtime` 改成**确定性写法**（`os.utime` 显式设不同 mtime，不依赖 `write_text` 的隐式 bump——CI 秒级文件系统下两次 write 可能同 tick）；新增 `test_mtime_tie_falls_back_to_filename` 直接复现"mtime 完全相同 → 按文件名取较新那份"。
-- **判断规则**：**B-30 的坑每新增一处"取最新文件"的排序都要一起查**。grep `sorted(...)st_mtime` / `key=lambda p: p.stat()` 找单判据漏网之鱼。
+- **判断规则**：**B-30 的坑每新增一处"取最新文件"的排序都要一起查**。grep `sorted(...)st_mtime` / `key=lambda p: p.stat()` 找单判据漏网之鱼。`scripts/pdd_detail_enrich.py` / `ecommerce_competitor_report.py` / `ecommerce_brand_compare_html.py` 的 3 处单判据排序也已在同笔提交改为双判据。
 
 ### B-75 `check_login` 的 `connect_over_cdp` 没传 `timeout` → 无界卡线程 ★
 - **症状**：`GET /api/browser/login-status` 被前端每 3s 轮询一次；CDP 端口活着但浏览器卡死时，`check_login` 里的 attach 会一直占着 threadpool 线程。
 - **根因**：`check_login` 调 `p.chromium.connect_over_cdp(self.cdp_url)` **没有传 `timeout`**（B-68 量过握手 0.12s，但那是健康态；卡死态无界）。`_probe_cdp` 有 3s 上限，真 attach 却没设。
 - **修法**：新增常量 `CDP_CONNECT_TIMEOUT_MS = 5000`（与脚本里 `urlopen(timeout=5)` 口径一致），`connect_over_cdp(self.cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS)`。Playwright 的 `timeout` 单位是**毫秒**。
 - **测试**：`test_ecommerce_browser_ctl.py::test_check_login_passes_connect_timeout` 用 fake 替换 `playwright.sync_api.sync_playwright`（零 Chrome 启动），断言 capture 到 `timeout == CDP_CONNECT_TIMEOUT_MS`。
-- **判断规则**：**任何 attach/connect 真实浏览器的调用都必须带显式 `timeout`**，否则单点卡死会拖垮整个轮询端点。
+- **判断规则**：**任何 attach/connect 真实浏览器的调用都必须带显式 `timeout`**，否则单点卡死会拖垮整个轮询端点。`scripts/ecommerce_brand_compare.py`（`/api/scan` 真调用的脚本）的 `connect_over_cdp` 也已补 `timeout=CDP_CONNECT_TIMEOUT_MS=10_000`。
+
+### B-76 脚本侧复发：`scripts/` 里同样的单判据排序 + 无 timeout connect ★
+- **症状**：验收点 B 收尾时只修了 `app/` 里的 `FileHTMLSource.fetch`（B-74）和 `check_login`（B-75），`scripts/` 里同款隐患没动——这是 B-74/B-75 的**第三处复发**。
+- **根因**：B-74/B-75 的"判断规则"要求 grep 全仓单判据漏网之鱼，但当时按"非 Web UI 热路径"划掉了脚本，没一并修。
+- **修法（同笔小提交）**：
+  - 3 处单判据 `st_mtime` 排序 → 双判据 `(mtime, name)`：`scripts/pdd_detail_enrich.py:_find_latest_list_html`、`scripts/ecommerce_competitor_report.py:_find_latest_raw`、`scripts/ecommerce_brand_compare_html.py:_find_latest`。
+  - `scripts/ecommerce_brand_compare.py` 的 `connect_over_cdp(cdp_url)` → `connect_over_cdp(cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS)`（新增常量 `10_000` ms）—— 这是 `/api/scan` 真正起子进程调用的脚本，卡死会让前端永远转圈。
+- **判断规则**：**修 `app/` 的同款 bug 时，先 grep 全仓确认 `scripts/` 是否也有同样写法再定 scope**。本次只给 `/api/scan` 热路径的 `ecommerce_brand_compare.py` 补了 timeout；另两处脚本 connect（`pdd_cdp_extract.py:122` / `pdd_detail_enrich.py:142`）属手工一次性跑、风险低，按用户 scope 暂不动，留待后续。grep `key=lambda p: p.stat().st_mtime` 找所有单判据排序、grep `connect_over_cdp` 找所有 attach 点。
 
 ---
 

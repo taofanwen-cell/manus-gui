@@ -45,7 +45,7 @@ def _detect_keyword(html: str) -> str | None:
 
 
 def _find_latest_raw(out_dir: Path) -> Path | None:
-    files = sorted(out_dir.glob("pdd_raw_*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(out_dir.glob("pdd_raw_*.html"), key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
     return files[0] if files else None
 
 

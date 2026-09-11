@@ -286,7 +286,7 @@ def main() -> int:
         print("[detail] 无 pdd_detail_*.json → 销量降级为列表页店铺/品牌累计 (口径会标 ⚠)")
 
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(cdp_url)
+        browser = p.chromium.connect_over_cdp(cdp_url, timeout=CDP_CONNECT_TIMEOUT_MS)
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         page = context.pages[0] if context.pages else context.new_page()
 

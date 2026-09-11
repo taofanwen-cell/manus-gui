@@ -62,7 +62,7 @@ def _check_cdp(cdp_url: str) -> None:
 
 
 def _find_latest_list_html(out_dir: Path, brand: str) -> Path | None:
-    files = sorted(out_dir.glob(f"pdd_raw_{brand}_*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(out_dir.glob(f"pdd_raw_{brand}_*.html"), key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
     return files[0] if files else None
 
 

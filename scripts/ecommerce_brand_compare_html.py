@@ -42,7 +42,7 @@ PRICE_BUCKET_COLORS = ["#94a3b8", "#38bdf8", "#fb923c", "#f43f5e"]
 
 
 def _find_latest(out_dir: Path, pattern: str) -> Path | None:
-    files = sorted(out_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(out_dir.glob(pattern), key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
     return files[0] if files else None
 
 
