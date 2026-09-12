@@ -63,6 +63,17 @@ def _fmt_price_cell(price) -> str:
     return "—" if price is None else f"¥{price}"
 
 
+def _band_label(median: float | None) -> str:
+    """按中位数给品牌定档 (与「二、品牌价位定位」同一套口径)."""
+    if median is None:
+        return "未知"
+    if median < 100:
+        return "低价走量 (<¥100)"
+    if median < 300:
+        return "中端 (¥100-300)"
+    return "中高端 (>¥300)"
+
+
 #: top_sales 的取值来源 —— 决定下游 (API/前端/insight) 怎么标这个数字
 SALES_SRC_SINGLE = "single"        # 详情页单品销量 (真实, 可跨品牌比)
 SALES_SRC_SHOP_TOTAL = "shop_total"  # 列表页 salesTip 店铺/品牌累计 (不可当单品比)
@@ -297,14 +308,7 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
     with_median = sorted((r for r in rows if r["median"] is not None), key=lambda r: r["median"])
     bands = []
     for r in with_median:
-        m = r["median"]
-        if m < 100:
-            band = "低价走量 (<¥100)"
-        elif m < 300:
-            band = "中端 (¥100-300)"
-        else:
-            band = "中高端 (>¥300)"
-        bands.append(f"- **{r['brand']}** 中位数 ¥{m} —— {band}")
+        bands.append(f"- **{r['brand']}** 中位数 ¥{r['median']} —— {_band_label(r['median'])}")
 
     scanned_txt = "、".join(scanned) if scanned else "无"
     failed_txt = "、".join(failed) if failed else "无"
@@ -334,6 +338,21 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
         )
     else:
         warning_md = ""
+
+    # 定位结论: 多品牌对比最低/最高价位; 单品牌只描述自身, 避免"最低=最高"的退化表述
+    if len(with_median) >= 2:
+        lo, hi = with_median[0], with_median[-1]
+        conclusion = (
+            f"- 定位结论：{lo['brand']} 切入最低价位（中位数 ¥{lo['median']}，{_band_label(lo['median'])}），"
+            f"{hi['brand']} 价位最高（中位数 ¥{hi['median']}，{_band_label(hi['median'])}）。"
+        )
+    elif len(with_median) == 1:
+        r0 = with_median[0]
+        conclusion = (
+            f"- 定位结论：仅 {r0['brand']} 一个品牌进入对比，中位数 ¥{r0['median']}，属 {_band_label(r0['median'])}。"
+        )
+    else:
+        conclusion = "- 定位结论：无有效价格数据，无法判断价位定位。"
 
     return f"""# 拼多多蓝牙耳机竞品横向对比报告
 
@@ -373,7 +392,7 @@ def _render_markdown(rows: list[dict], scanned: list[str], failed: list[str], so
 
 - 销量优先取**详情页单品销量**（可跨品牌比），采不到才降级到列表页 `salesTip` 的**店铺/品牌累计**（不可比），并在上表「销量口径」列标出。
 - 店铺名 / 评论数仅详情页有；未跑 `scripts/pdd_detail_enrich.py` 的品牌这两列为空。
-- 定位结论：{with_median[0]['brand'] if with_median else '—'} 切入最低价位（中位数 ¥{with_median[0]['median']}），{with_median[-1]['brand'] if with_median else '—'} 价位最高（中位数 ¥{with_median[-1]['median']}）。
+{conclusion}
 """
 
 

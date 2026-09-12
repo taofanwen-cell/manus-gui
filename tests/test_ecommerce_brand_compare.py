@@ -97,6 +97,16 @@ def test_render_markdown_median_banding():
     assert "华为 价位最高" in md
 
 
+def test_render_markdown_single_brand_conclusion_not_degenerate():
+    # 单品牌时不应出现"X 切入最低价位…X 价位最高"的自相矛盾表述 (一眼可见的蠢输出, 演示露脸)
+    rows = [_brand_row("OPPO", _make_report(median=2699, top_price=2677), 20)]
+    md = _render_markdown(rows, ["OPPO"], [], "note")
+    assert "OPPO 切入最低价位（中位数 ¥2699），OPPO 价位最高（中位数 ¥2699）" not in md
+    # 应改为只描述该品牌自身的定位
+    assert "仅 OPPO 一个品牌进入对比" in md
+    assert "中高端" in md
+
+
 def test_render_markdown_small_sales_not_wan():
     # 销量 < 1万 用原始整数, 不转"万"
     rows = [_brand_row("QCY", _make_report(top_sales=6100), 20)]
