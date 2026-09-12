@@ -205,6 +205,31 @@ def test_brand_row_aligned_sales_from_detail():
     assert row["top_sales_source"] == "single"
 
 
+def test_render_markdown_snapshot_date_shown_when_same_goods():
+    # 同 goods_id (same_goods) + 详情页有单品销量 + 快照日期 → 报告出现「单品销量 (快照 YYYY-mm-dd)」+「数据时效提示」
+    # (此前该标注全测试文件只有一句注释, 无断言; 它在 OPPO 这类 shop_total 场景下根本不触发, 坏了看不出来)
+    rep = _make_report_ex(goods_id="960370019979", title="OPPO Enco Free4 蓝牙耳机", price_cny=349)
+    detail = {"goods_id": "960370019979", "top_model": "OPPO Enco Free4 蓝牙耳机",
+              "top_price": 349, "single_sales": 216000, "snapshot_date": "2026-09-10"}
+    row = _brand_row("OPPO", rep, 20, detail=detail)
+    md = _render_markdown([row], ["OPPO"], [], "note")
+    assert row["top_sales_source"] == "single"
+    assert "单品销量 (快照 2026-09-10)" in md
+    assert "数据时效提示" in md
+
+
+def test_render_markdown_snapshot_date_hidden_when_misaligned():
+    # goods_id 不一致 → 整行锚定列表页 top1, 销量口径 shop_total, 报告不应出现任何「快照」标注
+    rep = _make_report_ex(goods_id="Reno15", title="OPPO Reno15 5G手机", price_cny=2677, top_sales=1_200_000)
+    detail = {"goods_id": "960370019979", "top_model": "OPPO Enco Free4 蓝牙耳机",
+              "top_price": 349, "single_sales": 216000, "snapshot_date": "2026-09-10"}
+    row = _brand_row("OPPO", rep, 20, detail=detail)
+    md = _render_markdown([row], ["OPPO"], [], "note")
+    assert row["top_sales_source"] == "shop_total"
+    assert "快照" not in md
+    assert "数据时效提示" not in md
+
+
 # --- 问题①: 品类一致性检查 (B-79) ---
 
 def test_detect_category_drift_classifies_and_triggers():
